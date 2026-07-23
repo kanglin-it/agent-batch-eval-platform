@@ -1,0 +1,43 @@
+# 复制为 config.ini 后填写实际值 (config.ini 已被 gitignore, 不会提交)。
+# 密码含特殊字符(@ # $ ! ) 等)直接写, 无需任何转义/URL 编码。
+
+[database]
+# 登录用库(用户表) —— PostgreSQL, 本地直连服务器库
+host = your-pg-host
+port = 5432
+user = zhiexa_saas
+password = your-password
+dbname = saas
+# 登录校验用的用户表名; Django 默认 auth_user, 自定义 User 模型则改这里
+user_table = auth_user
+
+[case_database]
+# 用例数据库(t_history_*_dataset)。留空则复用 [database] 的连接。
+host =
+port =
+user =
+password =
+dbname =
+qa_table = t_history_qa_dataset
+review_table = t_history_review_dataset
+
+[jwt]
+secret = change-me-to-a-long-random-string
+algorithm = HS256
+# 登录态默认时长(秒); 运行时可被 系统设置 覆盖。30 天 = 2592000
+login_ttl_seconds = 2592000
+
+[app]
+runtime_config_path = runtime_config.json
+cors_origins = http://localhost:5173
+# 本地预览用: true 时任意账号密码即可登录(超管)。上线务必 false。
+dev_login_enabled = false
+
+[zhiexa]
+login_url = https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login
+skill_base = https://skill.zhiexa.com
+phone = 15067062596
+password = your-zhiexa-password
+channel_type = PC
+jwt_ttl_seconds = 518400
+chat_timeout = 300

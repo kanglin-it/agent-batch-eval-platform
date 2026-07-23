@@ -6,7 +6,8 @@ venv/
 *.egg-info/
 .env
 
-# Runtime-editable config (admin overrides, not source)
+# Backend config (holds credentials) + runtime overrides
+config.ini
 runtime_config.json
 
 # Node

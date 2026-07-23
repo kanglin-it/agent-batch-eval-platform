@@ -19,7 +19,7 @@ runs the two-stage batch evaluation pipeline (Agent 执行 → 对比评测).
 app/
   main.py                 # FastAPI app + CORS + routers
   core/
-    config.py             # settings (.env)
+    config.py             # settings (config.ini)
     security.py           # Django password verify + JWT
   db/session.py           # async SQLAlchemy engine/session
   models/
@@ -38,7 +38,8 @@ app/
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # then edit DATABASE_URL / USER_TABLE / JWT_SECRET
+cp config.ini.example config.ini   # then edit [database] / [case_database] / [jwt]
+python -m scripts.init_db          # create eval_task / eval_task_case tables
 uvicorn app.main:app --reload
 # Swagger UI: http://127.0.0.1:8000/docs
 ```

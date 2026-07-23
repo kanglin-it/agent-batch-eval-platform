@@ -1,60 +1,111 @@
+"""Configuration loaded from a plain `config.ini` (easy to read/edit).
+
+DB connection is given as discrete fields (host/port/user/password/dbname) and the
+SQLAlchemy URL is built in code — so passwords with special characters (@ # $ ! ) …)
+need NO URL-encoding. Interpolation is disabled so literal `%` is fine too.
+
+Lookup order for the file: $CONFIG_FILE, ./config.ini, then backend/config.ini.
+Missing keys fall back to sensible defaults so the app still boots.
+"""
+import configparser
+import os
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
+
+PG_DRIVER = "postgresql+asyncpg"
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+def _find_config() -> Path:
+    env = os.getenv("CONFIG_FILE")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()          # app/core/config.py
+    backend_dir = here.parents[2]            # backend/
+    for c in (Path.cwd() / "config.ini", backend_dir / "config.ini"):
+        if c.exists():
+            return c
+    return backend_dir / "config.ini"
 
-    # Database (shared with the Django ops backend) — used for login (auth_user).
-    database_url: str = "mysql+aiomysql://user:password@127.0.0.1:3306/ops_backend"
-    user_table: str = "auth_user"
 
-    # Case-data database (PostgreSQL 'saas') — holds the history dataset tables that
-    # 用例管理页 queries. Read directly; separate from the login database.
-    case_database_url: str = "postgresql+asyncpg://user:password@127.0.0.1:5432/saas"
-    case_qa_table: str = "t_history_qa_dataset"
-    case_review_table: str = "t_history_review_dataset"
+class Settings:
+    def __init__(self) -> None:
+        cp = configparser.ConfigParser(interpolation=None)
+        path = _find_config()
+        self.config_path = str(path)
+        if path.exists():
+            cp.read(path, encoding="utf-8")
 
-    # JWT — this platform's own token, unrelated to Django SECRET_KEY
-    jwt_secret: str = "change-me"
-    jwt_algorithm: str = "HS256"
-    # Default login-session lifetime. Env value is only the DEFAULT; the effective
-    # value is read at login time and can be overridden at runtime via the JSON
-    # config file (see services/settings_service.py). 30 days = 2592000s.
-    login_ttl_seconds: int = 2592000
+        def s(sec: str, key: str, default: str = "") -> str:
+            return cp.get(sec, key, fallback=default) if cp.has_section(sec) else default
 
-    # Path to the runtime-editable JSON config file (holds admin overrides such as
-    # login_ttl_seconds). No database table is used.
-    runtime_config_path: str = "runtime_config.json"
+        def i(sec: str, key: str, default: int) -> int:
+            try:
+                return cp.getint(sec, key)
+            except (configparser.Error, ValueError):
+                return default
 
-    # Dev-only login bypass for local UI preview: when true, /api/auth/login accepts
-    # ANY username/password and issues a superuser token WITHOUT touching the user DB.
-    # NEVER enable in production.
-    dev_login_enabled: bool = False
+        def b(sec: str, key: str, default: bool) -> bool:
+            try:
+                return cp.getboolean(sec, key)
+            except (configparser.Error, ValueError):
+                return default
 
-    # CORS
-    cors_origins: str = "http://localhost:5173"
+        # ---- login database (PostgreSQL; holds the user table for /api/auth/login) ----
+        db_host = s("database", "host", "127.0.0.1")
+        db_port = i("database", "port", 5432)
+        db_user = s("database", "user")
+        db_pass = s("database", "password")
+        db_name = s("database", "dbname", "saas")
+        self.user_table = s("database", "user_table", "auth_user")
+        self.database_url = _pg_url(db_host, db_port, db_user, db_pass, db_name)
 
-    # External evaluation services
-    coze_api_base: str = "https://api.coze.cn"
-    coze_api_token: str = ""
-    agent_api_base: str = ""
+        # ---- case database (defaults to the same server as [database]) ----
+        c_host = s("case_database", "host") or db_host
+        c_port = i("case_database", "port", 0) or db_port
+        c_user = s("case_database", "user") or db_user
+        c_pass = s("case_database", "password") or db_pass
+        c_name = s("case_database", "dbname") or db_name
+        self.case_qa_table = s("case_database", "qa_table", "t_history_qa_dataset")
+        self.case_review_table = s("case_database", "review_table", "t_history_review_dataset")
+        self.case_database_url = _pg_url(c_host, c_port, c_user, c_pass, c_name)
 
-    # ---- Zhiexa Agent (sandbox conversation) — the Agent that reruns cases ----
-    # NOTE: these are credentials; overridable via env. Prefer injecting the
-    # password from a secret store rather than relying on the default.
-    zhiexa_login_url: str = "https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login"
-    zhiexa_skill_base: str = "https://skill.zhiexa.com"
-    zhiexa_phone: str = "15067062596"
-    zhiexa_password: str = "jBlBo5Iw7CcOpm7L5VS/9Q=="
-    zhiexa_channel_type: str = "PC"
-    zhiexa_jwt_ttl_seconds: int = 518400        # cache exchanged JWT ~6 days (JWT valid 7)
-    zhiexa_chat_timeout: int = 300
+        # ---- JWT (this platform's own token) ----
+        self.jwt_secret = s("jwt", "secret", "change-me")
+        self.jwt_algorithm = s("jwt", "algorithm", "HS256")
+        self.login_ttl_seconds = i("jwt", "login_ttl_seconds", 2592000)
+
+        # ---- app ----
+        self.runtime_config_path = s("app", "runtime_config_path", "runtime_config.json")
+        self.cors_origins = s("app", "cors_origins", "http://localhost:5173")
+        self.dev_login_enabled = b("app", "dev_login_enabled", False)
+
+        # ---- Zhiexa Agent ----
+        self.zhiexa_login_url = s("zhiexa", "login_url",
+                                  "https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login")
+        self.zhiexa_skill_base = s("zhiexa", "skill_base", "https://skill.zhiexa.com")
+        self.zhiexa_phone = s("zhiexa", "phone")
+        self.zhiexa_password = s("zhiexa", "password")
+        self.zhiexa_channel_type = s("zhiexa", "channel_type", "PC")
+        self.zhiexa_jwt_ttl_seconds = i("zhiexa", "jwt_ttl_seconds", 518400)
+        self.zhiexa_chat_timeout = i("zhiexa", "chat_timeout", 300)
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+def _pg_url(host: str, port: int, user: str, password: str, dbname: str) -> URL:
+    """Build a SQLAlchemy async PG URL; URL.create escapes special chars for us."""
+    return URL.create(
+        PG_DRIVER,
+        username=user or None,
+        password=password or None,
+        host=host or None,
+        port=port or None,
+        database=dbname or None,
+    )
 
 
 @lru_cache

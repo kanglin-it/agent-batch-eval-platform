@@ -4,9 +4,7 @@ uvicorn[standard]==0.34.0
 
 # Data / ORM
 sqlalchemy[asyncio]==2.0.36
-# DB drivers:
-aiomysql==0.2.0        # login DB (Django ops backend), if MySQL
-asyncpg==0.30.0        # case-data DB (PostgreSQL 'saas')
+asyncpg==0.30.0        # PostgreSQL driver (login DB + case-data DB)
 
 # Auth: verify Django password hashes + issue our own JWT
 passlib[bcrypt,argon2]==1.7.4
@@ -15,7 +13,6 @@ pyjwt==2.10.1
 # HTTP client for the Zhiexa Agent integration (SSE streaming)
 httpx==0.28.1
 
-# Config / validation
+# Validation (schemas). Config is read from config.ini via stdlib configparser.
 pydantic==2.10.4
-pydantic-settings==2.7.1
 python-multipart==0.0.20
