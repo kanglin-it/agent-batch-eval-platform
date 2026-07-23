@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # login_ttl_seconds). No database table is used.
     runtime_config_path: str = "runtime_config.json"
 
+    # Dev-only login bypass for local UI preview: when true, /api/auth/login accepts
+    # ANY username/password and issues a superuser token WITHOUT touching the user DB.
+    # NEVER enable in production.
+    dev_login_enabled: bool = False
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 

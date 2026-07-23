@@ -19,6 +19,16 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     We only READ the user row and verify the plaintext against Django's stored
     hash — no Django runtime and no SECRET_KEY required.
     """
+    # Local dev preview: bypass the user DB entirely (env-gated, off by default).
+    if settings.dev_login_enabled:
+        ttl_seconds = get_login_ttl()
+        token = create_access_token(
+            subject="0",
+            ttl_seconds=ttl_seconds,
+            extra={"username": body.username or "dev", "is_staff": True, "is_superuser": True},
+        )
+        return TokenResponse(access_token=token, expires_in=ttl_seconds)
+
     result = await db.execute(select(User).where(User.username == body.username))
     user = result.scalar_one_or_none()
 
