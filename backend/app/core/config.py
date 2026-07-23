@@ -6,9 +6,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Database (shared with the Django ops backend)
+    # Database (shared with the Django ops backend) — used for login (auth_user).
     database_url: str = "mysql+aiomysql://user:password@127.0.0.1:3306/ops_backend"
     user_table: str = "auth_user"
+
+    # Case-data database (PostgreSQL 'saas') — holds the history dataset tables that
+    # 用例管理页 queries. Read directly; separate from the login database.
+    case_database_url: str = "postgresql+asyncpg://user:password@127.0.0.1:5432/saas"
+    case_qa_table: str = "t_history_qa_dataset"
+    case_review_table: str = "t_history_review_dataset"
 
     # JWT — this platform's own token, unrelated to Django SECRET_KEY
     jwt_secret: str = "change-me"
