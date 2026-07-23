@@ -52,9 +52,12 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="toolbar">
-      <el-button type="primary" @click="goCreate">创建评测任务</el-button>
-      <el-button @click="load">刷新</el-button>
+    <div class="page-header">
+      <h3 class="page-title">评测任务管理</h3>
+      <div class="actions">
+        <el-button @click="load">刷新</el-button>
+        <el-button type="primary" @click="goCreate">创建评测任务</el-button>
+      </div>
     </div>
 
     <el-table :data="tasks" v-loading="loading" border>
@@ -98,9 +101,19 @@ onMounted(load)
 </template>
 
 <style scoped>
-.toolbar {
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.page-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.actions {
   display: flex;
   gap: 8px;
-  margin-bottom: 12px;
 }
 </style>
