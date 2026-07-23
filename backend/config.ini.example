@@ -2,14 +2,15 @@
 # 密码含特殊字符(@ # $ ! ) 等)直接写, 无需任何转义/URL 编码。
 
 [database]
-# 登录用库(用户表) —— PostgreSQL, 本地直连服务器库
+# 登录用库(运营平台用户表 t_operation_user 所在库) —— PostgreSQL, 本地直连服务器库。
+# 若运营平台库与用例库不是同一个, 这里填运营平台库。
 host = your-pg-host
 port = 5432
 user = zhiexa_saas
 password = your-password
 dbname = saas
-# 登录校验用的用户表名; Django 默认 auth_user, 自定义 User 模型则改这里
-user_table = auth_user
+# 登录校验用的用户表; 运营平台 User 继承 AbstractUser, 密码是 Django 标准哈希, 按 username 登录。
+user_table = t_operation_user
 
 [case_database]
 # 用例库: 直接查 SaaS 原始任务表(与 scripts/export_history_seed_sql.py 同源)。

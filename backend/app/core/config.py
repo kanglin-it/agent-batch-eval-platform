@@ -58,7 +58,7 @@ class Settings:
         db_user = s("database", "user")
         db_pass = s("database", "password")
         db_name = s("database", "dbname", "saas")
-        self.user_table = s("database", "user_table", "auth_user")
+        self.user_table = s("database", "user_table", "t_operation_user")
         self.database_url = _pg_url(db_host, db_port, db_user, db_pass, db_name)
 
         # ---- case database (defaults to the same server as [database]) ----

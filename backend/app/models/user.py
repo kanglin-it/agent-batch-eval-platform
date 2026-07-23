@@ -1,8 +1,9 @@
-"""Read-only mapping of the Django ops-backend user table.
+"""Read-only mapping of the ops-platform user table (default t_operation_user).
 
-We only READ this table for authentication. Password changes / user creation stay
-in the Django admin to avoid double-write conflicts. Table name is configurable via
-USER_TABLE because a custom AUTH_USER_MODEL changes it (e.g. `users_user`).
+That model extends Django's AbstractUser, so `password` holds a standard Django
+hash (pbkdf2_sha256 …) which passlib verifies directly. Login is by `username`.
+We only READ this table; user/password management stays in the ops platform. The
+table name is configurable via [database] user_table.
 """
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
