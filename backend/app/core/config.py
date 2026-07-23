@@ -96,21 +96,33 @@ class Settings:
         self.zhiexa_jwt_ttl_seconds = i("zhiexa", "jwt_ttl_seconds", 518400)
         self.zhiexa_chat_timeout = i("zhiexa", "chat_timeout", 300)
 
-        # ---- SaaS OSS file AES (encrypted .txt objects on review modules) ----
-        # Keys mirror scripts/export_history_seed_sql.py candidates.
-        primary_key = s("crypt", "file_key", "55c897adcf75ed57909eb3ca909b7659")
-        primary_iv = s("crypt", "iv", "1969735b2fcac313063827dc5fcd0cb4")
-        candidates = [
-            (primary_key, primary_iv),
-            ("55c897adcf75ed57909eb3ca909b7659", "1969735b2fcac313063827dc5fcd0cb4"),
-            ("9352cd03eb310dea14b2d43de7e1c188", "8591e40e6f381a9c3ed8c153fa15369b"),
-        ]
-        seen: set[tuple[str, str]] = set()
+        # ---- SaaS OSS file AES (encrypted .txt objects) ----
+        # Primary + optional file_key_2/iv_2, file_key_3/iv_3 … from [crypt].
         self.aes_key_candidates: list[tuple[str, str]] = []
-        for pair in candidates:
+        seen: set[tuple[str, str]] = set()
+
+        def _add_aes(key: str, iv: str) -> None:
+            key, iv = (key or "").strip(), (iv or "").strip()
+            if not key or not iv:
+                return
+            pair = (key, iv)
             if pair not in seen:
                 seen.add(pair)
                 self.aes_key_candidates.append(pair)
+
+        _add_aes(s("crypt", "file_key"), s("crypt", "iv"))
+        for n in range(2, 6):
+            _add_aes(s("crypt", f"file_key_{n}"), s("crypt", f"iv_{n}"))
+        # Last-resort built-in fallbacks if [crypt] is missing entirely.
+        if not self.aes_key_candidates:
+            _add_aes(
+                "55c897adcf75ed57909eb3ca909b7659",
+                "1969735b2fcac313063827dc5fcd0cb4",
+            )
+            _add_aes(
+                "9352cd03eb310dea14b2d43de7e1c188",
+                "8591e40e6f381a9c3ed8c153fa15369b",
+            )
 
     @property
     def cors_origin_list(self) -> list[str]:
