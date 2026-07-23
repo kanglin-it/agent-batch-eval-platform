@@ -20,6 +20,7 @@ export interface CreateTaskPayload {
   eval_workflow_id: string
   case_ids: string[]
   filter_snapshot?: Record<string, unknown>
+  creator?: string
 }
 
 export function listTasks() {

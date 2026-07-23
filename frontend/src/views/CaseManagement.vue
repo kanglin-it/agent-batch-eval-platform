@@ -1,15 +1,16 @@
 <script setup lang="ts">
+import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import http from '@/api/http'
+import { fetchMe } from '@/api/auth'
 import { createTask } from '@/api/task'
-import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const SELECTION_LIMIT = 500
 
-// 功能类型(source) 枚举 -> 中文
 const SOURCE_LABELS: Record<string, string> = {
   legal_research: '法律研究',
   document_draft: '文书起草',
@@ -19,16 +20,48 @@ const SOURCE_LABELS: Record<string, string> = {
   file_review: '文件审查',
 }
 
-// ---- 筛选条件 ----
+const EXTRA_FIELD_OPTIONS = [
+  { label: '二级功能', value: 'sub_function' },
+  { label: 'channel_type', value: 'channel_type' },
+  { label: '任务ID', value: 'task_id' },
+]
+
+function defaultDateRange(): [string, string] {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - 30)
+  const fmt = (d: Date) => {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  return [fmt(start), fmt(end)]
+}
+
+const [defaultStart, defaultEnd] = defaultDateRange()
+
 const filters = reactive({
-  created_start: '',
-  created_end: '',
+  created_start: defaultStart,
+  created_end: defaultEnd,
   function_type: '',
   has_file: null as boolean | null,
   user_rating: '',
   keyword: '',
   dedup: false,
-  exclude_failed: false,
+  exclude_failed: true,
+  extra: [] as { field: string; value: string }[],
+})
+
+const dateRange = computed({
+  get: (): [string, string] | null =>
+    filters.created_start && filters.created_end
+      ? [filters.created_start, filters.created_end]
+      : null,
+  set: (v: [string, string] | null) => {
+    filters.created_start = v?.[0] ?? ''
+    filters.created_end = v?.[1] ?? ''
+  },
 })
 
 interface CaseItem {
@@ -45,42 +78,108 @@ interface CaseItem {
   is_empty_result?: boolean | null
   stance?: Record<string, any> | null
   created_at?: string
+  channel_type?: string
 }
 
 const rows = ref<CaseItem[]>([])
 const total = ref(0)
-const page = reactive({ current: 1, size: 20 })
+const page = reactive({ current: 1, size: 10 })
 const selectedIds = ref<Set<string>>(new Set())
 const loading = ref(false)
 
-const countText = computed(() =>
-  selectedIds.value.size > 0
-    ? `共 ${total.value} 条，已选中 ${selectedIds.value.size} 条`
-    : `共 ${total.value} 条`,
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / page.size)))
+
+const visiblePages = computed(() => {
+  const maxVisible = 5
+  const tp = totalPages.value
+  if (tp <= maxVisible) {
+    return Array.from({ length: tp }, (_, i) => i + 1)
+  }
+  let start = Math.max(1, page.current - 2)
+  let end = start + maxVisible - 1
+  if (end > tp) {
+    end = tp
+    start = Math.max(1, end - maxVisible + 1)
+  }
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i)
+})
+
+const allSelected = computed(
+  () => total.value > 0 && selectedIds.value.size >= Math.min(total.value, SELECTION_LIMIT),
 )
-const allSelected = computed(() => total.value > 0 && selectedIds.value.size >= Math.min(total.value, SELECTION_LIMIT))
+
+const pageSelectedCount = computed(
+  () => rows.value.filter((r) => selectedIds.value.has(r.task_id)).length,
+)
+
+const pageAllSelected = computed(
+  () => rows.value.length > 0 && pageSelectedCount.value === rows.value.length,
+)
+
+const pageIndeterminate = computed(
+  () => pageSelectedCount.value > 0 && pageSelectedCount.value < rows.value.length,
+)
 
 function sourceLabel(s?: string) {
   return (s && SOURCE_LABELS[s]) || s || '—'
 }
+
 function ratingLabel(r?: string) {
   return r === 'good' ? '好评' : r === 'bad' ? '差评' : '—'
 }
-function ratingTag(r?: string) {
-  return r === 'good' ? 'success' : r === 'bad' ? 'danger' : 'info'
+
+function fileName(attachment?: string) {
+  if (!attachment) return ''
+  try {
+    const parsed = JSON.parse(attachment)
+    if (Array.isArray(parsed) && parsed.length) {
+      const first = parsed[0]
+      return typeof first === 'string' ? first.split('/').pop() || first : first?.name || String(first)
+    }
+    if (parsed && typeof parsed === 'object' && parsed.name) return parsed.name
+  } catch {
+    /* plain string */
+  }
+  return attachment.split(/[,;]/)[0]?.trim().split('/').pop() || attachment
 }
-function stanceText(row: CaseItem) {
-  const s = row.stance
-  if (!s) return '—'
-  if (s.review_stance || s.subject) return [s.review_stance, s.subject].filter(Boolean).join(' / ')
-  if (s.custom_require) return s.custom_require
-  return JSON.stringify(s)
+
+function formatTime(v?: string) {
+  if (!v) return '—'
+  return v.replace('T', ' ').slice(0, 16)
+}
+
+function goPage(p: number) {
+  if (p < 1 || p > totalPages.value || p === page.current) return
+  page.current = p
+  // 本页勾选不跨页保留，翻页后表头全选与勾选状态清空
+  selectedIds.value = new Set()
+  search()
+}
+
+function goFirst() {
+  goPage(1)
+}
+
+function goPrev() {
+  goPage(page.current - 1)
+}
+
+function goNext() {
+  goPage(page.current + 1)
+}
+
+function goLast() {
+  goPage(totalPages.value)
 }
 
 async function search() {
   loading.value = true
   try {
-    const { data } = await http.post('/api/cases', filters, {
+    const payload = {
+      ...filters,
+      extra: filters.extra.filter((e) => e.field && e.value !== ''),
+    }
+    const { data } = await http.post('/api/cases', payload, {
       params: { page: page.current, page_size: page.size },
     })
     rows.value = data.items
@@ -91,29 +190,63 @@ async function search() {
   }
 }
 
-function reset() {
-  Object.assign(filters, {
-    created_start: '', created_end: '', function_type: '', has_file: null,
-    user_rating: '', keyword: '', dedup: false, exclude_failed: false,
-  })
+function clearPageSelection() {
+  selectedIds.value = new Set()
 }
 
-// "全部选中" — 跨所有页, 由后端按当前筛选返回全部 task_id(上限 500)
+function onFilterSearch() {
+  page.current = 1
+  clearPageSelection()
+  search()
+}
+
+function reset() {
+  const [start, end] = defaultDateRange()
+  Object.assign(filters, {
+    created_start: start,
+    created_end: end,
+    function_type: '',
+    has_file: null,
+    user_rating: '',
+    keyword: '',
+    dedup: false,
+    exclude_failed: true,
+    extra: [],
+  })
+  selectedIds.value = new Set()
+  page.current = 1
+  search()
+}
+
+function addExtraFilter() {
+  filters.extra.push({ field: '', value: '' })
+}
+
+function removeExtraFilter(idx: number) {
+  filters.extra.splice(idx, 1)
+}
+
 async function toggleSelectAll() {
   if (allSelected.value) {
     selectedIds.value = new Set()
     return
   }
-  const { data } = await http.post('/api/cases/ids', filters)
-  selectedIds.value = new Set<string>(data.ids)
-  if (data.capped) ElMessage.warning('用例数量上限为 500 条')
+  const payload = {
+    ...filters,
+    extra: filters.extra.filter((e) => e.field && e.value !== ''),
+  }
+  const { data } = await http.post('/api/cases/ids', payload)
+  selectedIds.value = new Set<string>(data.ids.slice(0, SELECTION_LIMIT))
+  if (data.capped || data.total > SELECTION_LIMIT) {
+    ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条，已自动截取前 ${SELECTION_LIMIT} 条`)
+  }
 }
 
 function onRowSelect(row: CaseItem, checked: boolean) {
   const next = new Set(selectedIds.value)
   if (checked) {
     if (next.size >= SELECTION_LIMIT) {
-      ElMessage.warning('用例数量上限为 500 条')
+      ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条`)
       return
     }
     next.add(row.task_id)
@@ -123,147 +256,546 @@ function onRowSelect(row: CaseItem, checked: boolean) {
   selectedIds.value = next
 }
 
-// ---- 创建评测任务弹窗 ----
-const dialogVisible = ref(false)
-const taskForm = reactive({ name: '', eval_workflow_id: '' })
+/** 表头勾选：只选中 / 取消本页任务 */
+function togglePageSelect(checked: boolean) {
+  const next = new Set(selectedIds.value)
+  if (checked) {
+    for (const row of rows.value) {
+      if (next.has(row.task_id)) continue
+      if (next.size >= SELECTION_LIMIT) {
+        ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条`)
+        break
+      }
+      next.add(row.task_id)
+    }
+  } else {
+    for (const row of rows.value) {
+      next.delete(row.task_id)
+    }
+  }
+  selectedIds.value = next
+}
 
-function openCreateDialog() {
-  taskForm.name = new Date().toLocaleString('zh-CN')
+const dialogVisible = ref(false)
+const taskForm = reactive({ name: '', eval_workflow_id: '', creator: '' })
+const creating = ref(false)
+
+const filterSummary = computed(() => {
+  const parts: string[] = []
+  parts.push(`自动去重：${filters.dedup ? '是' : '否'}`)
+  if (filters.exclude_failed) parts.push('去除失败任务：是')
+  if (filters.function_type) parts.push(`功能类型：${SOURCE_LABELS[filters.function_type] || filters.function_type}`)
+  if (filters.user_rating === 'good') parts.push('用户评价：好评')
+  if (filters.user_rating === 'bad') parts.push('用户评价：差评')
+  if (filters.keyword) parts.push(`关键词：${filters.keyword}`)
+  if (filters.created_start || filters.created_end) {
+    parts.push(`创建时间：${filters.created_start || '…'} ~ ${filters.created_end || '…'}`)
+  }
+  return parts.join('；')
+})
+
+async function openCreateDialog() {
+  if (selectedIds.value.size === 0) {
+    ElMessage.warning('请先选择评测用例')
+    return
+  }
+  if (selectedIds.value.size > SELECTION_LIMIT) {
+    ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条，请减少后再创建`)
+    return
+  }
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  taskForm.name = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
   taskForm.eval_workflow_id = ''
+  taskForm.creator = '当前用户'
+  try {
+    const me = await fetchMe()
+    if (me?.username) taskForm.creator = me.username
+  } catch {
+    /* keep placeholder */
+  }
   dialogVisible.value = true
 }
 
 async function submitTask() {
-  if (!taskForm.name) return ElMessage.warning('请填写任务名称')
-  if (!taskForm.eval_workflow_id) return ElMessage.warning('请填写评测标准 workflow 后，重新提交')
+  if (!taskForm.name.trim()) return ElMessage.warning('请填写任务名称')
+  if (!taskForm.eval_workflow_id.trim()) return ElMessage.warning('请填写评测标准 Workflow')
+  if (!taskForm.creator.trim()) return ElMessage.warning('请填写创建人')
   const ids = Array.from(selectedIds.value)
-  await createTask({ name: taskForm.name, eval_workflow_id: taskForm.eval_workflow_id, case_ids: ids, filter_snapshot: { ...filters } })
-  ElMessage.success(`任务创建成功，共 ${ids.length} 条用例`)
-  dialogVisible.value = false
-  router.push({ name: 'tasks' })
+  if (ids.length === 0) return ElMessage.warning('请先选择评测用例')
+  if (ids.length > SELECTION_LIMIT) {
+    return ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条，当前已选 ${ids.length} 条`)
+  }
+  creating.value = true
+  try {
+    await createTask({
+      name: taskForm.name.trim(),
+      eval_workflow_id: taskForm.eval_workflow_id.trim(),
+      case_ids: ids,
+      filter_snapshot: { ...filters },
+      creator: taskForm.creator.trim(),
+    })
+    ElMessage.success(`任务创建成功，共 ${ids.length} 条用例`)
+    dialogVisible.value = false
+    router.push({ name: 'tasks' })
+  } finally {
+    creating.value = false
+  }
 }
+
+onMounted(() => {
+  search()
+})
 </script>
 
 <template>
-  <div>
-    <!-- 筛选条件 -->
-    <el-form :inline="true" class="filter-bar">
-      <el-form-item label="功能类型">
-        <el-select v-model="filters.function_type" placeholder="全部" clearable style="width: 140px">
-          <el-option v-for="(label, val) in SOURCE_LABELS" :key="val" :label="label" :value="val" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="是否带文件">
-        <el-select v-model="filters.has_file" placeholder="全部" clearable style="width: 110px">
-          <el-option label="是" :value="true" />
-          <el-option label="否" :value="false" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="用户评价">
-        <el-select v-model="filters.user_rating" placeholder="全部" clearable style="width: 110px">
-          <el-option label="好评" value="good" />
-          <el-option label="差评" value="bad" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="用户提问">
-        <el-input v-model="filters.keyword" placeholder="关键词检索" clearable />
-      </el-form-item>
-      <el-form-item>
-        <el-checkbox v-model="filters.dedup">自动去重</el-checkbox>
-        <el-checkbox v-model="filters.exclude_failed">去除失败任务</el-checkbox>
-      </el-form-item>
-      <el-form-item>
-        <el-button type="primary" @click="search">筛选</el-button>
-        <el-button @click="reset">重置</el-button>
-      </el-form-item>
-    </el-form>
-
-    <!-- 工具条 -->
-    <div class="toolbar">
-      <div>
-        <el-button size="small" @click="toggleSelectAll">{{ allSelected ? '取消全选' : '全部选中' }}</el-button>
-        <span class="count">{{ countText }}</span>
-      </div>
-      <el-button type="primary" :disabled="selectedIds.size === 0" @click="openCreateDialog">创建评测任务</el-button>
+  <div class="page">
+    <div class="page-header">
+      <h2 class="page-title">评测用例管理</h2>
+      <el-button type="primary" @click="openCreateDialog">创建评测任务</el-button>
     </div>
 
-    <!-- 用例列表 -->
-    <el-table :data="rows" v-loading="loading" border>
-      <el-table-column width="55">
-        <template #default="{ row }">
-          <el-checkbox :model-value="selectedIds.has(row.task_id)" @change="(v: boolean) => onRowSelect(row, v)" />
-        </template>
-      </el-table-column>
-      <el-table-column prop="task_id" label="任务ID" width="150" show-overflow-tooltip />
-      <el-table-column label="功能模块" width="110">
-        <template #default="{ row }">{{ sourceLabel(row.function_module) }}</template>
-      </el-table-column>
-      <el-table-column prop="question" label="用户提问" min-width="200" show-overflow-tooltip />
-      <el-table-column label="是否带文件" width="100" align="center">
-        <template #default="{ row }">{{ row.has_file ? '是' : '否' }}</template>
-      </el-table-column>
-      <el-table-column label="好差评" width="90" align="center">
-        <template #default="{ row }">
-          <el-tag :type="ratingTag(row.rating)" size="small" effect="light">{{ ratingLabel(row.rating) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="审查立场" min-width="150" show-overflow-tooltip>
-        <template #default="{ row }">{{ stanceText(row) }}</template>
-      </el-table-column>
-      <el-table-column prop="system_answer" label="系统回答" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.system_answer ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="创建时间" width="170" />
-    </el-table>
+    <div class="panel filter-panel">
+      <div class="panel-title">
+        <el-icon><Search /></el-icon>
+        <span>筛选条件</span>
+      </div>
 
-    <el-pagination
-      class="pager"
-      layout="total, prev, pager, next, sizes"
-      :total="total"
-      :page-size="page.size"
-      :current-page="page.current"
-      @current-change="(p: number) => { page.current = p; search() }"
-      @size-change="(s: number) => { page.size = s; search() }"
-    />
+      <el-form label-width="100px" label-position="left" class="filter-form">
+        <el-form-item label="创建时间：">
+          <el-date-picker
+            v-model="dateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="年 / 月 / 日"
+            end-placeholder="年 / 月 / 日"
+            value-format="YYYY-MM-DD"
+            class="filter-control"
+          />
+        </el-form-item>
+        <el-form-item label="功能类型：">
+          <el-select v-model="filters.function_type" placeholder="- 全部 -" clearable class="filter-control">
+            <el-option v-for="(label, val) in SOURCE_LABELS" :key="val" :label="label" :value="val" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="是否带文件：">
+          <el-select v-model="filters.has_file" placeholder="- 全部 -" clearable class="filter-control">
+            <el-option label="是" :value="true" />
+            <el-option label="否" :value="false" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="用户评价：">
+          <el-select v-model="filters.user_rating" placeholder="- 全部 -" clearable class="filter-control">
+            <el-option label="好评" value="good" />
+            <el-option label="差评" value="bad" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="用户提问：">
+          <el-input v-model="filters.keyword" placeholder="关键词搜索" clearable class="filter-control filter-control--wide" />
+        </el-form-item>
+        <el-form-item label="数据处理：">
+          <div class="data-ops">
+            <el-checkbox v-model="filters.dedup">自动去重</el-checkbox>
+            <el-checkbox v-model="filters.exclude_failed">去除失败任务</el-checkbox>
+          </div>
+        </el-form-item>
 
-    <!-- 新建评测任务弹窗 -->
-    <el-dialog v-model="dialogVisible" title="新建批量测试任务" width="520px">
-      <el-form label-width="130px">
-        <el-form-item label="任务名称" required>
-          <el-input v-model="taskForm.name" />
+        <el-form-item v-for="(item, idx) in filters.extra" :key="idx" label="额外条件：">
+          <div class="extra-row">
+            <el-select v-model="item.field" placeholder="筛选字段" style="width: 160px">
+              <el-option v-for="opt in EXTRA_FIELD_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-input v-model="item.value" placeholder="筛选值" clearable style="width: 280px" />
+            <el-button link type="danger" @click="removeExtraFilter(idx)">删除</el-button>
+          </div>
         </el-form-item>
-        <el-form-item label="用例范围">
-          <span>已选中 {{ selectedIds.size }} 条用例</span>
-        </el-form-item>
-        <el-form-item label="评测标准 workflow" required>
-          <el-input v-model="taskForm.eval_workflow_id" placeholder="输入 Coze 工作流 id" />
+
+        <el-form-item label=" ">
+          <div class="filter-actions">
+            <el-button @click="addExtraFilter">+ 新增筛选条件</el-button>
+            <el-button type="primary" @click="onFilterSearch">筛选</el-button>
+            <el-button @click="reset">重置</el-button>
+          </div>
         </el-form-item>
       </el-form>
+    </div>
+
+    <div class="panel list-panel">
+      <div class="list-header">
+        <div class="list-title">
+          <span>用例列表（共 {{ total }} 条）</span>
+          <el-button link type="primary" @click="toggleSelectAll">
+            {{ allSelected ? '取消全选' : '全部选中' }}
+          </el-button>
+          <span v-if="selectedIds.size" class="selected-tip">
+            已选中 {{ selectedIds.size }} / {{ SELECTION_LIMIT }} 条
+          </span>
+        </div>
+      </div>
+
+      <el-table :data="rows" v-loading="loading" border stripe>
+        <el-table-column width="48" align="center" fixed>
+          <template #header>
+            <el-checkbox
+              :model-value="pageAllSelected"
+              :indeterminate="pageIndeterminate"
+              @change="(v: boolean) => togglePageSelect(v)"
+            />
+          </template>
+          <template #default="{ row }">
+            <el-checkbox
+              :model-value="selectedIds.has(row.task_id)"
+              @change="(v: boolean) => onRowSelect(row, v)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="task_id" label="任务ID" width="160" show-overflow-tooltip />
+        <el-table-column label="功能模块" width="110">
+          <template #default="{ row }">{{ sourceLabel(row.function_module) }}</template>
+        </el-table-column>
+        <el-table-column label="二级功能" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.sub_function || '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="question" label="用户提问" min-width="200" show-overflow-tooltip />
+        <el-table-column label="附件" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.has_file" type="success" size="small" effect="light">有</el-tag>
+            <span v-else class="muted">无</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="上传文件" width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <a v-if="row.has_file && fileName(row.attachment)" class="file-link" href="javascript:;">
+              {{ fileName(row.attachment) }}
+            </a>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="system_answer" label="系统回答" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.system_answer || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="好差评" width="90" align="center">
+          <template #default="{ row }">{{ ratingLabel(row.rating) }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="channel_type" width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.channel_type || '—' }}</template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pager">
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current <= 1"
+          aria-label="首页"
+          @click="goFirst"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current <= 1"
+          aria-label="上一页"
+          @click="goPrev"
+        >
+          ‹
+        </button>
+
+        <template v-for="p in visiblePages" :key="p">
+          <button
+            v-if="p === page.current"
+            type="button"
+            class="pager-btn pager-btn--active"
+            @click="goPage(p)"
+          >
+            {{ p }}
+          </button>
+          <button v-else type="button" class="pager-num" @click="goPage(p)">{{ p }}</button>
+        </template>
+
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current >= totalPages"
+          aria-label="下一页"
+          @click="goNext"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current >= totalPages"
+          aria-label="末页"
+          @click="goLast"
+        >
+          »
+        </button>
+        <span class="pager-summary">共 {{ totalPages }} 页 / {{ total }} 条</span>
+      </div>
+    </div>
+
+    <el-dialog
+      v-model="dialogVisible"
+      title="新建批量测试任务"
+      width="520px"
+      class="create-task-dialog"
+      :close-on-click-modal="false"
+    >
+      <el-form label-position="top" class="create-task-form" @submit.prevent>
+        <el-form-item required>
+          <template #label><span class="req">*</span> 任务名称</template>
+          <el-input v-model="taskForm.name" placeholder="请输入任务名称" />
+        </el-form-item>
+
+        <el-form-item label="用例范围">
+          <div class="scope-box">
+            <div class="scope-count">已选中 <em>{{ selectedIds.size }}</em> 条用例</div>
+            <div class="scope-filters">筛选条件：{{ filterSummary }}</div>
+          </div>
+        </el-form-item>
+
+        <el-form-item required>
+          <template #label><span class="req">*</span> 评测标准 Workflow</template>
+          <el-input v-model="taskForm.eval_workflow_id" placeholder="填入Coze工作流ID" />
+        </el-form-item>
+
+        <el-form-item required>
+          <template #label><span class="req">*</span> 创建人</template>
+          <el-input v-model="taskForm.creator" placeholder="当前用户" disabled />
+        </el-form-item>
+      </el-form>
+
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitTask">创建任务</el-button>
+        <el-button class="btn-cancel" @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitTask">创建任务</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.filter-bar {
-  margin-bottom: 8px;
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-.toolbar {
+
+.page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 8px 0;
 }
-.count {
-  margin-left: 12px;
+
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2a37;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.filter-form {
+  max-width: 720px;
+}
+
+.filter-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.filter-form :deep(.el-form-item__label) {
+  color: #606266;
+  justify-content: flex-start;
+}
+
+.filter-control {
+  width: 280px;
+}
+
+.filter-control--wide {
+  width: 420px;
+  max-width: 100%;
+}
+
+.data-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  min-height: 32px;
+  align-items: center;
+}
+
+.extra-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.list-header {
+  margin-bottom: 12px;
+}
+
+.list-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.selected-tip {
+  font-size: 13px;
+  font-weight: 400;
+  color: #909399;
+}
+
+.file-link {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.file-link:hover {
+  text-decoration: underline;
+}
+
+.muted {
+  color: #c0c4cc;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.pager-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #1677ff;
+  border-radius: 4px;
+  background: #1677ff;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pager-btn:hover:not(:disabled) {
+  background: #4096ff;
+  border-color: #4096ff;
+}
+
+.pager-btn:disabled {
+  background: #f5f5f5;
+  border-color: #d9d9d9;
+  color: #bfbfbf;
+  cursor: not-allowed;
+}
+
+.pager-btn--active {
+  font-weight: 600;
+}
+
+.pager-num {
+  min-width: 24px;
+  height: 32px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: #303133;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pager-num:hover {
+  color: #1677ff;
+}
+
+.pager-summary {
+  margin-left: 8px;
+  color: #606266;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.create-task-form :deep(.el-form-item__label) {
+  color: #303133;
+  font-weight: 500;
+  padding-bottom: 6px;
+}
+
+.req {
+  color: #f56c6c;
+  margin-right: 2px;
+}
+
+.scope-box {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fafafa;
+  line-height: 1.6;
+}
+
+.scope-count {
+  color: #303133;
+  font-size: 14px;
+}
+
+.scope-count em {
+  font-style: normal;
+  color: #1677ff;
+  font-weight: 600;
+}
+
+.scope-filters {
+  margin-top: 4px;
   color: #909399;
   font-size: 12px;
 }
-.pager {
-  margin-top: 12px;
-  justify-content: flex-end;
+
+.btn-cancel {
+  background: #909399;
+  border-color: #909399;
+  color: #fff;
+}
+
+.btn-cancel:hover,
+.btn-cancel:focus {
+  background: #a6a9ad;
+  border-color: #a6a9ad;
+  color: #fff;
 }
 </style>

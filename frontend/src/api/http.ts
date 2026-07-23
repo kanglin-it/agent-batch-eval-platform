@@ -6,7 +6,7 @@ import router from '@/router'
 
 const http = axios.create({
   baseURL: '/',
-  timeout: 30000,
+  timeout: 120000,
 })
 
 // Attach the platform JWT to every request.
