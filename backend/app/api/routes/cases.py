@@ -1,84 +1,112 @@
 """Case management (用例管理页).
 
-Cases are read directly from the history dataset tables in the PostgreSQL 'saas'
-database: `t_history_qa_dataset` (问答型) and `t_history_review_dataset` (审查型),
-merged into one list. These tables only contain FINISH tasks (failed/timeout tasks
-are never exported), so the "去除失败任务" toggle is effectively always on.
+Performance strategy:
+  1. Query each live source in parallel (own DB session)
+  2. Each source only returns LIMIT (offset+page_size) light rows
+  3. Merge-sort in Python, then slice the page
+  4. No full-table COUNT — total is inferred from whether more candidates exist
 """
-import json
+from __future__ import annotations
+
+import asyncio
+import heapq
+from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.db.case_session import get_case_db
+from app.db.case_session import CaseSessionLocal
 from app.schemas.auth import CurrentUser
 from app.schemas.case import CaseFilter, CaseIdsResponse, CaseItem, CasePage
+from app.services.case_source import (
+    SourceFilters,
+    build_list_source_sql,
+    resolve_sources,
+)
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 CASE_SELECTION_LIMIT = 500
 
 
-def _union_cte() -> str:
-    """Align the two differently-shaped dataset tables into one column set."""
-    qa, review = settings.case_qa_table, settings.case_review_table
-    return f"""
-    WITH unioned AS (
-        SELECT 'qa' AS kind, source, task_id, question, src_created, result_score,
-               answer AS system_answer,
-               doc_ids AS attachment,
-               (doc_ids IS NOT NULL AND doc_ids <> '') AS has_file,
-               NULL::jsonb AS stance
-        FROM {qa}
-        UNION ALL
-        SELECT 'review' AS kind, source, task_id, question, src_created, result_score,
-               NULL AS system_answer,
-               original_file AS attachment,
-               TRUE AS has_file,
-               stance
-        FROM {review}
-    )"""
+def _source_filters(filters: CaseFilter) -> SourceFilters:
+    return SourceFilters(
+        created_start=_parse_day(filters.created_start),
+        created_end=_parse_day_end(filters.created_end),
+        keyword=filters.keyword or None,
+        has_file=filters.has_file,
+        user_rating=filters.user_rating if filters.user_rating in ("good", "bad") else None,
+        exclude_failed=bool(filters.exclude_failed),
+    )
 
 
-def _where(filters: CaseFilter) -> tuple[str, dict]:
-    conds: list[str] = []
-    params: dict = {}
-    if filters.created_start:
-        conds.append("src_created >= :created_start")
-        params["created_start"] = filters.created_start
-    if filters.created_end:
-        conds.append("src_created <= :created_end")
-        params["created_end"] = filters.created_end
-    if filters.function_type:
-        conds.append("source = :function_type")
-        params["function_type"] = filters.function_type
-    if filters.has_file is not None:
-        conds.append("has_file = :has_file")
-        params["has_file"] = filters.has_file
-    if filters.keyword:
-        conds.append("question ILIKE :keyword")
-        params["keyword"] = f"%{filters.keyword}%"
-    # 用户评价: 只有好评(1)/差评(0) 参与筛选; 未知(2)/无反馈(NULL) 不算好差评。
-    if filters.user_rating in ("good", "bad"):
-        conds.append("result_score = :rating_val")
-        params["rating_val"] = 1 if filters.user_rating == "good" else 0
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
-    return where, params
+def _parse_day(value: str | None):
+    """asyncpg needs date/datetime, not 'YYYY-MM-DD' strings."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
 
 
-def _select_body(filters: CaseFilter) -> str:
-    """Core SELECT over the union, honouring the dedup (同用户问题) option."""
-    where, _ = _where(filters)
-    if filters.dedup:
-        # Keep the latest row per identical question.
-        return f"""
-        SELECT DISTINCT ON (question) *
-        FROM unioned {where}
-        ORDER BY question, src_created DESC"""
-    return f"SELECT * FROM unioned {where}"
+def _parse_day_end(value: str | None):
+    """Inclusive end-of-day for a date-only filter."""
+    d = _parse_day(value)
+    if d is None:
+        return None
+    return datetime.combine(d, time(23, 59, 59))
+
+
+
+def _created_key(row: dict):
+    """Normalize naive/aware timestamps so heapq.merge can compare them."""
+    v = row.get("src_created")
+    if v is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if isinstance(v, datetime):
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+async def _fetch_source_rows(
+    source: str,
+    *,
+    schema: str,
+    sf: SourceFilters,
+    per_source_limit: int,
+) -> list[dict]:
+    sql, params = build_list_source_sql(
+        schema, source, filters=sf, per_source_limit=per_source_limit,
+    )
+    async with CaseSessionLocal() as session:
+        rows = (await session.execute(text(sql), params)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def _merge_desc(groups: list[list[dict]]) -> list[dict]:
+    decorated = [sorted(g, key=_created_key, reverse=True) for g in groups if g]
+    if not decorated:
+        return []
+    return list(heapq.merge(*decorated, key=_created_key, reverse=True))
+
+
+def _dedup_by_question(rows: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in rows:
+        q = r.get("question") or ""
+        if q in seen:
+            continue
+        seen.add(q)
+        out.append(r)
+    return out
 
 
 @router.post("", response_model=CasePage)
@@ -86,69 +114,82 @@ async def list_cases(
     filters: CaseFilter,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_case_db),
     _: CurrentUser = Depends(get_current_user),
 ):
-    _, params = _where(filters)
-    body = _select_body(filters)
-    cte = _union_cte()
+    sf = _source_filters(filters)
+    schema = settings.case_schema
+    sources = resolve_sources(filters.function_type or None)
+    offset = (page - 1) * page_size
 
-    count_sql = text(f"{cte} SELECT count(*) FROM ({body}) AS c")
-    total = (await db.execute(count_sql, params)).scalar_one()
+    if not sources:
+        return CasePage(total=0, items=[])
 
-    page_sql = text(
-        f"{cte} SELECT * FROM ({body}) AS d ORDER BY d.src_created DESC LIMIT :limit OFFSET :offset"
-    )
-    rows = (
-        await db.execute(page_sql, {**params, "limit": page_size, "offset": (page - 1) * page_size})
-    ).mappings().all()
+    per_source = offset + page_size
+    if filters.dedup:
+        per_source = max(per_source * 3, 50)
 
-    return CasePage(total=total, items=[_to_item(r) for r in rows])
+    groups = await asyncio.gather(*[
+        _fetch_source_rows(s, schema=schema, sf=sf, per_source_limit=per_source)
+        for s in sources
+    ])
+
+    merged = _merge_desc(list(groups))
+    if filters.dedup:
+        merged = _dedup_by_question(merged)
+
+    page_rows = merged[offset: offset + page_size]
+    has_more = len(merged) > offset + page_size
+    # Avoid full-table COUNT. Expose a lower-bound total so the pager can advance.
+    if has_more:
+        total = offset + page_size + 1
+    else:
+        total = offset + len(page_rows)
+
+    return CasePage(total=total, items=[_to_item(r) for r in page_rows])
 
 
 @router.post("/ids", response_model=CaseIdsResponse)
 async def list_case_ids(
     filters: CaseFilter,
-    db: AsyncSession = Depends(get_case_db),
     _: CurrentUser = Depends(get_current_user),
 ):
-    """Return all task_ids matching the filter for cross-page "全部选中", capped at 500."""
-    _, params = _where(filters)
-    body = _select_body(filters)
-    cte = _union_cte()
+    sf = _source_filters(filters)
+    schema = settings.case_schema
+    sources = resolve_sources(filters.function_type or None)
+    if not sources:
+        return CaseIdsResponse(total=0, ids=[], capped=False)
 
-    total = (await db.execute(text(f"{cte} SELECT count(*) FROM ({body}) AS c"), params)).scalar_one()
-    ids = (
-        await db.execute(
-            text(f"{cte} SELECT task_id FROM ({body}) AS d ORDER BY d.src_created DESC LIMIT :limit"),
-            {**params, "limit": CASE_SELECTION_LIMIT},
-        )
-    ).scalars().all()
-    return CaseIdsResponse(total=total, ids=list(ids), capped=total > CASE_SELECTION_LIMIT)
+    per_source = CASE_SELECTION_LIMIT
+    if filters.dedup:
+        per_source = CASE_SELECTION_LIMIT * 2
 
+    groups = await asyncio.gather(*[
+        _fetch_source_rows(s, schema=schema, sf=sf, per_source_limit=per_source)
+        for s in sources
+    ])
+    merged = _merge_desc(list(groups))
+    if filters.dedup:
+        merged = _dedup_by_question(merged)
 
-_RATING = {1: "good", 0: "bad"}
+    ids = [r["task_id"] for r in merged[:CASE_SELECTION_LIMIT]]
+    capped = len(merged) > CASE_SELECTION_LIMIT or any(
+        len(g) >= per_source for g in groups
+    )
+    return CaseIdsResponse(total=len(ids), ids=ids, capped=capped)
 
 
 def _to_item(r) -> CaseItem:
-    stance = r["stance"]
-    if isinstance(stance, str):
-        try:
-            stance = json.loads(stance)
-        except (TypeError, ValueError):
-            stance = None
-    answer = r["system_answer"]
     return CaseItem(
         kind=r["kind"],
         task_id=r["task_id"],
         function_module=r["source"],
-        question=r["question"],
-        attachment=r["attachment"],
-        has_file=bool(r["has_file"]),
-        result_score=r["result_score"],
-        rating=_RATING.get(r["result_score"], "none"),
-        system_answer=answer,
-        is_empty_result=(answer is None or answer == "") if r["kind"] == "qa" else None,
-        stance=stance,
-        created_at=r["src_created"].isoformat() if r["src_created"] is not None else None,
+        question=r.get("question"),
+        attachment=r.get("attachment"),
+        has_file=bool(r.get("has_file")),
+        result_score=r.get("result_score"),
+        rating="none",
+        system_answer=None,
+        is_empty_result=None,
+        stance=None,
+        created_at=r["src_created"].isoformat() if r.get("src_created") is not None else None,
     )

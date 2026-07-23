@@ -12,12 +12,15 @@ dbname = saas
 user_table = auth_user
 
 [case_database]
-# 用例数据库(t_history_*_dataset)。留空则复用 [database] 的连接。
+# 用例库: 直接查 SaaS 原始任务表(与 scripts/export_history_seed_sql.py 同源)。
+# 留空则复用 [database] 的连接。
 host =
 port =
 user =
 password =
 dbname =
+schema = public
+# 以下两表仅兼容旧导出流程, 列表/回填已不再读取
 qa_table = t_history_qa_dataset
 review_table = t_history_review_dataset
 

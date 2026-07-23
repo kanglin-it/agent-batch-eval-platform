@@ -69,6 +69,7 @@ class Settings:
         c_name = s("case_database", "dbname") or db_name
         self.case_qa_table = s("case_database", "qa_table", "t_history_qa_dataset")
         self.case_review_table = s("case_database", "review_table", "t_history_review_dataset")
+        self.case_schema = s("case_database", "schema", "public")
         self.case_database_url = _pg_url(c_host, c_port, c_user, c_pass, c_name)
 
         # ---- JWT (this platform's own token) ----

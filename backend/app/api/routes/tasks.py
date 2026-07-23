@@ -32,7 +32,9 @@ async def create_task(
 ):
     if not body.case_ids:
         raise HTTPException(400, "请先选择评测用例")
-    case_ids = body.case_ids[:CASE_SELECTION_LIMIT]  # enforce 500 cap server-side
+    if len(body.case_ids) > CASE_SELECTION_LIMIT:
+        raise HTTPException(400, f"勾选用例最多 {CASE_SELECTION_LIMIT} 条")
+    case_ids = body.case_ids
 
     # Hydrate each case (question / files / stance / historical baseline) from the
     # PG dataset tables so the Agent has real input to rerun.
@@ -43,7 +45,7 @@ async def create_task(
         eval_workflow_id=body.eval_workflow_id,
         case_count=len(case_ids),
         status=TaskStatus.agent_running,
-        creator=current.username,
+        creator=(body.creator or current.username).strip() or current.username,
         filter_snapshot=body.filter_snapshot,
     )
     task.cases = [

@@ -13,7 +13,7 @@ class CaseFilter(BaseModel):
 
     # 数据处理
     dedup: bool = False                    # 自动去重（同用户问题）
-    exclude_failed: bool = False           # 去除失败任务（超时/报错）
+    exclude_failed: bool = True            # 默认只看 FINISH，显著减少扫描量
 
     # Extra dynamic conditions: [{"field": "...", "value": "..."}]
     extra: list[dict] = Field(default_factory=list)

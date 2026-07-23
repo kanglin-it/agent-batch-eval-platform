@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
-case_engine = create_async_engine(settings.case_database_url, pool_pre_ping=True, future=True)
+case_engine = create_async_engine(
+    settings.case_database_url,
+    pool_pre_ping=True,
+    pool_size=12,
+    max_overflow=12,
+    future=True,
+)
 CaseSessionLocal = async_sessionmaker(case_engine, expire_on_commit=False, class_=AsyncSession)
 
 

@@ -1,12 +1,11 @@
-"""Hydrate selected cases from the PG history dataset tables.
+"""Hydrate selected cases from live SaaS task tables.
 
 At task-creation time we only have the selected task_ids. Before the Agent can
-rerun them we must pull each case's question / files / stance / historical baseline
-out of `t_history_qa_dataset` / `t_history_review_dataset`.
+rerun them we pull each case's question / files / stance / historical baseline
+from the same 6 live sources used by the case list
+(`scripts/export_history_seed_sql.py`).
 
-Per type:
-  QA     -> question; baseline = answer;                 files = [doc_ids]
-  review -> question; baseline = detail_annotated_file;  files = [original_file, *reference_files]; stance
+Each source query is filtered by `task_id = ANY(:ids)` so we never scan full tables.
 """
 import json
 
@@ -14,47 +13,47 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.case_source import build_hydrate_sql
 
 
 async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, dict]:
     """Return {task_id: {source, question, files, stance, baseline_answer}}."""
     if not task_ids:
         return {}
-    qa, review = settings.case_qa_table, settings.case_review_table
-    sql = text(f"""
-        SELECT 'qa' AS kind, source, task_id, question,
-               answer AS baseline_answer,
-               doc_ids AS doc_ids,
-               NULL AS original_file, NULL::jsonb AS reference_files, NULL::jsonb AS stance
-        FROM {qa} WHERE task_id = ANY(:ids)
-        UNION ALL
-        SELECT 'review' AS kind, source, task_id, question,
-               detail_annotated_file AS baseline_answer,
-               NULL AS doc_ids,
-               original_file, reference_files, stance
-        FROM {review} WHERE task_id = ANY(:ids)
-    """)
+
+    sql = text(build_hydrate_sql(schema=settings.case_schema))
     rows = (await db.execute(sql, {"ids": task_ids})).mappings().all()
 
     out: dict[str, dict] = {}
     for r in rows:
         if r["kind"] == "qa":
-            files = [r["doc_ids"]] if r["doc_ids"] else []
+            files = [r["attachment"]] if r["attachment"] else []
             stance = None
+            baseline = r["system_answer"]
         else:
-            files = [r["original_file"]] if r["original_file"] else []
+            files = []
+            orig = _as_json(r["original_file"])
+            if isinstance(orig, dict) and orig.get("url"):
+                files.append(orig["url"])
+            elif isinstance(orig, str) and orig:
+                files.append(orig)
             refs = _as_json(r["reference_files"])
             if isinstance(refs, list):
-                files += refs
+                for item in refs:
+                    if isinstance(item, dict) and item.get("url"):
+                        files.append(item["url"])
+                    elif isinstance(item, str):
+                        files.append(item)
             stance_val = _as_json(r["stance"])
             stance = json.dumps(stance_val, ensure_ascii=False) if stance_val is not None else None
+            baseline = r["detail_annotated_file"]
 
         out[r["task_id"]] = {
             "source": r["source"],
             "question": r["question"] or "",
             "files": files,
             "stance": stance,
-            "baseline_answer": r["baseline_answer"],
+            "baseline_answer": baseline,
         }
     return out
 

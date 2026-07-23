@@ -10,6 +10,7 @@ class CreateTaskRequest(BaseModel):
     eval_workflow_id: str = Field(..., description="Coze 工作流 id")
     case_ids: list[str] = Field(..., max_length=500, description="选中的用例 id，上限 500")
     filter_snapshot: dict = Field(default_factory=dict)
+    creator: str | None = Field(default=None, description="创建人；为空则用当前登录用户")
 
 
 class TaskListItem(BaseModel):
