@@ -4,10 +4,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.api.routes.cases import CASE_SELECTION_LIMIT
+from app.db.case_session import get_case_db
 from app.db.session import get_db
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.task import CreateTaskRequest, TaskListItem
+from app.services.case_data import fetch_case_data
 from app.services.task_runner import run_task
 
 router = APIRouter(prefix="/api/eval-tasks", tags=["tasks"])
@@ -25,11 +27,16 @@ async def create_task(
     body: CreateTaskRequest,
     background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    case_db: AsyncSession = Depends(get_case_db),
     current: CurrentUser = Depends(get_current_user),
 ):
     if not body.case_ids:
         raise HTTPException(400, "请先选择评测用例")
     case_ids = body.case_ids[:CASE_SELECTION_LIMIT]  # enforce 500 cap server-side
+
+    # Hydrate each case (question / files / stance / historical baseline) from the
+    # PG dataset tables so the Agent has real input to rerun.
+    data = await fetch_case_data(case_db, case_ids)
 
     task = EvalTask(
         name=body.name,
@@ -39,7 +46,17 @@ async def create_task(
         creator=current.username,
         filter_snapshot=body.filter_snapshot,
     )
-    task.cases = [EvalTaskCase(source_case_id=cid, question="", stage=CaseStage.pending) for cid in case_ids]
+    task.cases = [
+        EvalTaskCase(
+            source_case_id=cid,
+            question=data.get(cid, {}).get("question", ""),
+            files=data.get(cid, {}).get("files", []),
+            stance=data.get(cid, {}).get("stance"),
+            baseline_answer=data.get(cid, {}).get("baseline_answer"),
+            stage=CaseStage.pending,
+        )
+        for cid in case_ids
+    ]
     db.add(task)
     await db.commit()
     await db.refresh(task, attribute_names=["cases"])
