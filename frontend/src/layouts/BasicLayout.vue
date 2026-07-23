@@ -8,8 +8,8 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-function onLogout() {
-  auth.logout()
+async function onLogout() {
+  await auth.logout()
   router.replace({ name: 'login' })
 }
 </script>

@@ -14,6 +14,10 @@ export function login(payload: LoginPayload) {
   return http.post<TokenResponse>('/api/auth/login', payload).then((r) => r.data)
 }
 
+export function logout() {
+  return http.post<{ ok: boolean }>('/api/auth/logout').then((r) => r.data)
+}
+
 export function fetchMe() {
   return http.get('/api/auth/me').then((r) => r.data)
 }

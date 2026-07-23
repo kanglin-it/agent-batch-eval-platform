@@ -36,6 +36,7 @@ class ZhiexaClient:
     async def _get_satoken(self, client: httpx.AsyncClient) -> str:
         r = await client.post(
             settings.zhiexa_login_url,
+            headers={"Domain": "www.zhiexa.com"},
             json={
                 "phoneNum": settings.zhiexa_phone,
                 "password": settings.zhiexa_password,

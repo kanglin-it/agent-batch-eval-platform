@@ -1,7 +1,6 @@
 """Evaluation domain models owned by THIS platform.
 
-These live in the same database but in new tables (prefixed `eval_`) so we never
-mutate the ops backend's schema.
+Tables use VARCHAR for status/stage (not PG ENUM types) — see DB DDL.
 """
 import datetime as dt
 import enum
@@ -35,6 +34,23 @@ class CaseStage(str, enum.Enum):
     failed = "failed"
 
 
+# Persist as VARCHAR to match DB DDL (status/stage are varchar, not PG enums).
+_TaskStatusCol = Enum(
+    TaskStatus,
+    name="taskstatus",
+    native_enum=False,
+    length=200,
+    values_callable=lambda enum_cls: [m.value for m in enum_cls],
+)
+_CaseStageCol = Enum(
+    CaseStage,
+    name="casestage",
+    native_enum=False,
+    length=200,
+    values_callable=lambda enum_cls: [m.value for m in enum_cls],
+)
+
+
 class EvalTask(Base):
     __tablename__ = "eval_task"
 
@@ -43,7 +59,7 @@ class EvalTask(Base):
     eval_workflow_id: Mapped[str] = mapped_column(String(100))   # Coze workflow id
     eval_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # reserved (P1)
     case_count: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.agent_running)
+    status: Mapped[TaskStatus] = mapped_column(_TaskStatusCol, default=TaskStatus.agent_running)
     creator: Mapped[str] = mapped_column(String(150))
 
     # Snapshot of the filter used, so the "用例范围" can be shown later.
@@ -54,9 +70,13 @@ class EvalTask(Base):
     avg_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     hallucination_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=lambda: dt.datetime.now(dt.timezone.utc))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc)
+        DateTime(timezone=True),
+        default=lambda: dt.datetime.now(dt.timezone.utc),
+        onupdate=lambda: dt.datetime.now(dt.timezone.utc),
     )
 
     cases: Mapped[list["EvalTaskCase"]] = relationship(back_populates="task", cascade="all, delete-orphan")
@@ -86,7 +106,7 @@ class EvalTaskCase(Base):
     is_win: Mapped[bool | None] = mapped_column(nullable=True)
     hallucination: Mapped[bool | None] = mapped_column(nullable=True)
 
-    stage: Mapped[CaseStage] = mapped_column(Enum(CaseStage), default=CaseStage.pending)
+    stage: Mapped[CaseStage] = mapped_column(_CaseStageCol, default=CaseStage.pending)
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     task: Mapped["EvalTask"] = relationship(back_populates="cases")

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { login as loginApi, type LoginPayload } from '@/api/auth'
+import { login as loginApi, logout as logoutApi, type LoginPayload } from '@/api/auth'
 
 const TOKEN_KEY = 'abep_token'
 
@@ -14,10 +14,21 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(TOKEN_KEY, res.access_token)
   }
 
-  function logout() {
+  function clearLocal() {
     token.value = ''
     localStorage.removeItem(TOKEN_KEY)
   }
 
-  return { token, login, logout }
+  async function logout() {
+    const current = token.value
+    try {
+      if (current) await logoutApi()
+    } catch {
+      // still clear local session even if server revoke fails
+    } finally {
+      clearLocal()
+    }
+  }
+
+  return { token, login, logout, clearLocal }
 })

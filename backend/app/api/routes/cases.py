@@ -178,7 +178,18 @@ async def list_case_ids(
     return CaseIdsResponse(total=len(ids), ids=ids, capped=capped)
 
 
+def _score_to_rating(score) -> str:
+    # 0=差评, 1=好评, 2=未知, NULL=无反馈 → 未知/无反馈都显示为 none
+    if score == 1:
+        return "good"
+    if score == 0:
+        return "bad"
+    return "none"
+
+
 def _to_item(r) -> CaseItem:
+    answer = r.get("system_answer")
+    score = r.get("result_score")
     return CaseItem(
         kind=r["kind"],
         task_id=r["task_id"],
@@ -186,10 +197,11 @@ def _to_item(r) -> CaseItem:
         question=r.get("question"),
         attachment=r.get("attachment"),
         has_file=bool(r.get("has_file")),
-        result_score=r.get("result_score"),
-        rating="none",
-        system_answer=None,
-        is_empty_result=None,
+        result_score=score,
+        rating=_score_to_rating(score),
+        system_answer=answer,
+        is_empty_result=(answer is None or answer == "") if r.get("kind") == "qa" else None,
         stance=None,
+        channel_type=r.get("channel_type"),
         created_at=r["src_created"].isoformat() if r.get("src_created") is not None else None,
     )

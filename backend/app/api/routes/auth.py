@@ -1,11 +1,13 @@
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+import httpx
+
+from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import settings
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_access_token
+from app.core.token_blacklist import revoke
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
@@ -59,6 +61,20 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         },
     )
     return TokenResponse(access_token=token, expires_in=ttl_seconds)
+
+
+@router.post("/logout")
+async def logout(token: str = Depends(oauth2_scheme)):
+    """Invalidate the current access token server-side, then client clears local storage."""
+    try:
+        payload = decode_access_token(token)
+    except Exception:
+        return {"ok": True}
+    jti = payload.get("jti")
+    exp = payload.get("exp")
+    if jti:
+        revoke(jti, float(exp) if exp is not None else None)
+    return {"ok": True}
 
 
 @router.get("/me", response_model=CurrentUser)

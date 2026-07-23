@@ -32,6 +32,7 @@ class CaseItem(BaseModel):
     system_answer: str | None = None       # 系统回答（历史基线, QA 才有）
     is_empty_result: bool | None = None    # 结果是否为空
     stance: dict | None = None             # 审查立场/持方页 (review 才有)
+    channel_type: str | None = None        # 渠道: PC / H5 / APP / MINI 等
     created_at: str | None = None
 
 

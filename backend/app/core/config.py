@@ -78,7 +78,7 @@ class Settings:
         # ---- login (ops-platform password API; fast, replaces local hash verify) ----
         self.operation_login_url = s(
             "auth", "login_url",
-            "https://operation.zhiexa.com/zhiexa/operation/api/v1/user/login/password/",
+            "https://test-opr.zhiexa.com/zhiexa/operation/api/v1/user/login/password/",
         )
         self.operation_login_timeout = i("auth", "login_timeout", 15)
         # Only these phones get superuser (可改「系统设置」). Comma-separated.

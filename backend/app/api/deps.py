@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 
 from app.core.security import decode_access_token
+from app.core.token_blacklist import is_revoked
 from app.schemas.auth import CurrentUser
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -19,6 +20,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
     except InvalidTokenError:
         raise cred_exc
     if payload.get("sub") is None:
+        raise cred_exc
+    if is_revoked(payload.get("jti")):
         raise cred_exc
     return CurrentUser(
         id=int(payload["sub"]),

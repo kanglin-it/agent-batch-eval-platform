@@ -40,11 +40,14 @@ def verify_password(plain: str, django_hash: str) -> bool:
 def create_access_token(*, subject: str, ttl_seconds: int | None = None, extra: dict | None = None) -> str:
     """Issue a JWT. `ttl_seconds` is the effective login-session lifetime resolved
     at login time (runtime setting -> env default); falls back to the env default."""
+    import uuid
+
     if ttl_seconds is None:
         ttl_seconds = settings.login_ttl_seconds
     now = dt.datetime.now(dt.timezone.utc)
     payload = {
         "sub": subject,
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + dt.timedelta(seconds=ttl_seconds),
     }

@@ -1,8 +1,8 @@
 """Live SaaS task sources for case list / hydration.
 
 List path is intentionally minimal and per-source:
-  - no full-text answers (TOAST detoast is slow)
-  - no feedback score unless filtering by rating
+  - QA sources return full system_answer as stored
+  - result_score from t_feedback_record (0差/1好/2未知/NULL无)
   - each source uses ORDER BY created DESC LIMIT N
   - callers run sources in parallel and merge in Python
 """
@@ -38,6 +38,16 @@ class SourceFilters:
     has_file: bool | None = None
     user_rating: str | None = None  # good | bad | None
     exclude_failed: bool = True
+
+
+def _score_sql(schema: str, source: str, task_key: str) -> str:
+    """Scalar subquery: result_score for task (0差/1好/2未知/NULL无反馈)."""
+    apps = ", ".join(f"'{a}'" for a in FEEDBACK_APPS[source])
+    return f"""(SELECT fr.result_score
+       FROM {schema}.t_feedback_record fr
+      WHERE fr.task_id = {task_key} AND fr.is_delete = 0
+        AND fr.application IN ({apps})
+      LIMIT 1)"""
 
 
 def _rating_exists(schema: str, source: str, task_key: str, rating: str) -> str:
@@ -113,10 +123,7 @@ def build_list_source_sql(
     filters: SourceFilters,
     per_source_limit: int,
 ) -> tuple[str, dict]:
-    """Ultra-light list row: id / source / question / created / has_file / attachment name.
-
-    Intentionally omits system_answer and result_score (both are expensive on large tables).
-    """
+    """List row including full system_answer (QA sources)."""
     lim = _limit_sql(per_source_limit)
 
     if source == "legal_research":
@@ -129,9 +136,10 @@ def build_list_source_sql(
         sql = f"""
         SELECT 'qa' AS kind, 'legal_research' AS source, t.chat_id AS task_id,
                t.question AS question, t.created AS src_created,
-               NULL::smallint AS result_score, NULL::text AS system_answer,
+               {_score_sql(schema, 'legal_research', 't.chat_id')} AS result_score,
+               t.llm_answer AS system_answer,
                CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
-               {has_file} AS has_file
+               {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_legal_research_info t
         WHERE t.is_delete = 0
           AND (t.parent_chat_id IS NULL OR t.parent_chat_id = t.chat_id)
@@ -149,12 +157,15 @@ def build_list_source_sql(
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
         )
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
+        # Strip reasoning prefix when present (same as export script).
+        answer = """NULLIF(btrim(regexp_replace(t.result, '^.*?zhiexa_reasoning_end', '', 's')), '')"""
         sql = f"""
         SELECT 'qa' AS kind, 'document_draft' AS source, t.task_id AS task_id,
                p.prompt_content AS question, t.created AS src_created,
-               NULL::smallint AS result_score, NULL::text AS system_answer,
+               {_score_sql(schema, 'document_draft', 't.task_id')} AS result_score,
+               {answer} AS system_answer,
                CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
-               {has_file} AS has_file
+               {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
         WHERE t.is_delete = 0
@@ -175,19 +186,28 @@ def build_list_source_sql(
             task_key="h.task_id", has_file_expr=has_file, filters=filters, schema=schema,
         )
         status = "AND h.status = 'FINISH'" if filters.exclude_failed else ""
+        # Fetch answer / score only for the limited rows (outer query).
+        preview = f"""(SELECT string_agg(o.content, '' ORDER BY o.id)
+                        FROM {schema}.t_fuxi_task_output o
+                       WHERE o.task_id = b.task_id AND o.type = 'analysis')"""
+        score = _score_sql(schema, source, "b.task_id")
         sql = f"""
-        SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
-               h.original_question AS question, h.created_at AS src_created,
-               NULL::smallint AS result_score, NULL::text AS system_answer,
-               CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
-               {has_file} AS has_file
-        FROM {schema}.t_fuxi_history_task h
-        WHERE h.is_deleted = 0 AND h.type = '{source}'
-          AND h.parent_task_id IS NULL
-          {status}
-          {_and(extra)}
-        ORDER BY h.created_at DESC
-        {lim}
+        SELECT b.kind, b.source, b.task_id, b.question, b.src_created,
+               {score} AS result_score, {preview} AS system_answer,
+               b.attachment, b.has_file, b.channel_type
+        FROM (
+            SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
+                   h.original_question AS question, h.created_at AS src_created,
+                   CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
+                   {has_file} AS has_file, h.channel_type AS channel_type
+            FROM {schema}.t_fuxi_history_task h
+            WHERE h.is_deleted = 0 AND h.type = '{source}'
+              AND h.parent_task_id IS NULL
+              {status}
+              {_and(extra)}
+            ORDER BY h.created_at DESC
+            {lim}
+        ) b
         """
         return sql, params
 
@@ -198,8 +218,6 @@ def build_list_source_sql(
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
         )
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
-        # Skip t_file_info name lookup on the hot path; has_file via EXISTS only when filtered.
-        # Default list: treat review tasks as has_file=true (they always upload an original file).
         if filters.has_file is None:
             has_file_select = "TRUE"
             attachment_select = "t.task_name"
@@ -211,9 +229,10 @@ def build_list_source_sql(
         sql = f"""
         SELECT 'review' AS kind, 'contract_review' AS source, t.task_id AS task_id,
                t.task_name AS question, t.created AS src_created,
-               NULL::smallint AS result_score, NULL::text AS system_answer,
+               {_score_sql(schema, 'contract_review', 't.task_id')} AS result_score,
+               NULL::text AS system_answer,
                {attachment_select} AS attachment,
-               {has_file_select} AS has_file
+               {has_file_select} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
           {status}
@@ -238,9 +257,10 @@ def build_list_source_sql(
         sql = f"""
         SELECT 'review' AS kind, 'file_review' AS source, t.task_id AS task_id,
                {qcol} AS question, t.created AS src_created,
-               NULL::smallint AS result_score, NULL::text AS system_answer,
+               {_score_sql(schema, 'file_review', 't.task_id')} AS result_score,
+               NULL::text AS system_answer,
                {qcol} AS attachment,
-               {has_file_select} AS has_file
+               {has_file_select} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0
           {status}

@@ -24,7 +24,7 @@ http.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     if (status === 401) {
-      useAuthStore().logout()
+      useAuthStore().clearLocal()
       router.replace({ name: 'login' })
     }
     const detail = error.response?.data?.detail

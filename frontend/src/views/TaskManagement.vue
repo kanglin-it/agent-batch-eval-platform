@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { listTasks, retryTask, type TaskListItem } from '@/api/task'
@@ -8,18 +8,13 @@ import { listTasks, retryTask, type TaskListItem } from '@/api/task'
 const router = useRouter()
 const tasks = ref<TaskListItem[]>([])
 const loading = ref(false)
+let timer: ReturnType<typeof setInterval> | null = null
 
 const STATUS_LABEL: Record<TaskListItem['status'], string> = {
   agent_running: 'Agent执行中',
   comparing: '对比评测中',
   completed: '已完成',
   failed: '失败',
-}
-const STATUS_TYPE: Record<TaskListItem['status'], string> = {
-  agent_running: 'warning',
-  comparing: 'primary',
-  completed: 'success',
-  failed: 'danger',
 }
 
 async function load() {
@@ -42,78 +37,164 @@ async function onRetry(row: TaskListItem) {
   load()
 }
 
-function statusText(row: TaskListItem) {
-  if (row.status === 'failed') return STATUS_LABEL.failed
-  return `${STATUS_LABEL[row.status]}（${row.progress}）`
+function onDownload(row: TaskListItem) {
+  ElMessage.info(`下载评测结果 Excel（任务 ${displayId(row)}）功能待接入`)
 }
 
-onMounted(load)
+function displayId(row: TaskListItem) {
+  const d = row.created_at ? new Date(row.created_at) : new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `TSK-${y}${m}${day}-${String(row.id).padStart(3, '0')}`
+}
+
+function statusText(row: TaskListItem) {
+  if (row.status === 'failed') return STATUS_LABEL.failed
+  return `${STATUS_LABEL[row.status]} (${row.progress})`
+}
+
+function statusClass(status: TaskListItem['status']) {
+  return {
+    agent_running: 'st-running',
+    comparing: 'st-comparing',
+    completed: 'st-done',
+    failed: 'st-failed',
+  }[status]
+}
+
+onMounted(() => {
+  load()
+  // 进行中的任务自动刷新进度
+  timer = setInterval(() => {
+    const busy = tasks.value.some((t) => t.status === 'agent_running' || t.status === 'comparing')
+    if (busy) load()
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 </script>
 
 <template>
-  <div>
+  <div class="page">
     <div class="page-header">
-      <h3 class="page-title">评测任务管理</h3>
-      <div class="actions">
-        <el-button @click="load">刷新</el-button>
-        <el-button type="primary" @click="goCreate">创建评测任务</el-button>
-      </div>
+      <h2 class="page-title">评测任务管理</h2>
+      <el-button type="primary" @click="goCreate">+ 新建任务</el-button>
     </div>
 
-    <el-table :data="tasks" v-loading="loading" border>
-      <el-table-column prop="id" label="任务ID" width="90" />
-      <el-table-column prop="name" label="任务名称" show-overflow-tooltip />
-      <el-table-column prop="eval_workflow_id" label="评测标准 Workflow" width="180" />
-      <el-table-column prop="case_count" label="用例数" width="90" />
-      <el-table-column label="任务状态" width="180">
-        <template #default="{ row }">
-          <el-tag :type="STATUS_TYPE[row.status]">{{ statusText(row) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="胜率" width="90">
-        <template #default="{ row }">{{ row.win_rate != null ? (row.win_rate * 100).toFixed(1) + '%' : '--' }}</template>
-      </el-table-column>
-      <el-table-column label="耗时" width="110">
-        <template #default="{ row }">{{ row.avg_latency_ms != null ? row.avg_latency_ms + ' ms' : '--' }}</template>
-      </el-table-column>
-      <el-table-column prop="hallucination_count" label="幻觉数" width="90">
-        <template #default="{ row }">{{ row.hallucination_count ?? '--' }}</template>
-      </el-table-column>
-      <el-table-column prop="creator" label="创建人" width="120" />
-      <el-table-column label="操作" width="180">
-        <template #default="{ row }">
-          <el-button link type="primary" :disabled="row.status !== 'failed'" @click="onRetry(row)">重试</el-button>
-          <el-dropdown>
-            <el-button link type="primary">下载</el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item>Excel 格式 · 评测结果</el-dropdown-item>
-                <el-dropdown-item>CSV 格式 · 评测结果</el-dropdown-item>
-                <el-dropdown-item>Excel 格式 · Agent 测试用例</el-dropdown-item>
-                <el-dropdown-item>CSV 格式 · Agent 测试用例</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </template>
-      </el-table-column>
-    </el-table>
+    <div class="panel">
+      <el-table :data="tasks" v-loading="loading" border stripe>
+        <el-table-column label="任务ID" width="180">
+          <template #default="{ row }">{{ displayId(row) }}</template>
+        </el-table-column>
+        <el-table-column prop="name" label="任务名称" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="case_count" label="用例数" width="100" align="center" />
+        <el-table-column label="任务状态" width="200">
+          <template #default="{ row }">
+            <span class="status" :class="statusClass(row.status)">{{ statusText(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="creator" label="创建人" width="120" />
+        <el-table-column label="操作" width="180" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-tooltip content="下载 评测结果Excel" placement="top">
+              <el-button class="btn-download" size="small" @click="onDownload(row)">下载</el-button>
+            </el-tooltip>
+            <el-button
+              class="btn-retry"
+              size="small"
+              :disabled="row.status !== 'failed'"
+              @click="onRetry(row)"
+            >
+              重试
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
 }
+
 .page-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 600;
+  color: #1f2a37;
 }
-.actions {
-  display: flex;
-  gap: 8px;
+
+.panel {
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+
+.status {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.st-running {
+  color: #d48806;
+}
+
+.st-comparing {
+  color: #722ed1;
+}
+
+.st-done {
+  color: #389e0d;
+}
+
+.st-failed {
+  color: #cf1322;
+}
+
+.btn-download {
+  background: #52c41a;
+  border-color: #52c41a;
+  color: #fff;
+}
+
+.btn-download:hover,
+.btn-download:focus {
+  background: #389e0d;
+  border-color: #389e0d;
+  color: #fff;
+}
+
+.btn-retry {
+  background: #ff4d4f;
+  border-color: #ff4d4f;
+  color: #fff;
+}
+
+.btn-retry:hover:not(:disabled),
+.btn-retry:focus:not(:disabled) {
+  background: #cf1322;
+  border-color: #cf1322;
+  color: #fff;
+}
+
+.btn-retry:disabled {
+  background: #ffccc7;
+  border-color: #ffccc7;
+  color: #fff;
+  opacity: 1;
 }
 </style>
