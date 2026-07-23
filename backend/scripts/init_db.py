@@ -1,8 +1,9 @@
 """Create this platform's own tables (dev/bootstrap helper).
 
-Creates ONLY the tables this platform owns — eval_task, eval_task_case,
-platform_setting — and never touches the Django-owned user table. For real
-deployments prefer Alembic migrations; this is a convenience for local setup.
+Creates ONLY the tables this platform owns — eval_task, eval_task_case — and
+never touches the Django-owned user table. Runtime settings (e.g. login TTL) are
+stored in a JSON config file, not the database, so there is no settings table.
+For real deployments prefer Alembic migrations; this is a convenience for local setup.
 
 Usage:
     cd backend && python -m scripts.init_db
@@ -11,9 +12,8 @@ import asyncio
 
 from app.db.session import Base, engine  # noqa: F401
 from app.models.eval_task import EvalTask, EvalTaskCase  # noqa: F401
-from app.models.platform_setting import PlatformSetting  # noqa: F401
 
-OWNED_TABLES = [EvalTask.__table__, EvalTaskCase.__table__, PlatformSetting.__table__]
+OWNED_TABLES = [EvalTask.__table__, EvalTaskCase.__table__]
 
 
 async def main() -> None:

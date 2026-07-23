@@ -27,8 +27,8 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not verify_password(body.password, user.password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
 
-    # Effective login lifetime resolved at login time (runtime setting -> env default).
-    ttl_seconds = await get_login_ttl(db)
+    # Effective login lifetime resolved at login time (config file -> env default).
+    ttl_seconds = get_login_ttl()
     token = create_access_token(
         subject=str(user.id),
         ttl_seconds=ttl_seconds,

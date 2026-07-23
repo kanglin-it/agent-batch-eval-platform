@@ -14,9 +14,13 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     # Default login-session lifetime. Env value is only the DEFAULT; the effective
-    # value is read at login time and can be overridden at runtime via the
-    # platform_setting table (see services/settings_service.py). 30 days = 2592000s.
+    # value is read at login time and can be overridden at runtime via the JSON
+    # config file (see services/settings_service.py). 30 days = 2592000s.
     login_ttl_seconds: int = 2592000
+
+    # Path to the runtime-editable JSON config file (holds admin overrides such as
+    # login_ttl_seconds). No database table is used.
+    runtime_config_path: str = "runtime_config.json"
 
     # CORS
     cors_origins: str = "http://localhost:5173"

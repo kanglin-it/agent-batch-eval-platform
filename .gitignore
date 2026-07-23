@@ -6,6 +6,9 @@ venv/
 *.egg-info/
 .env
 
+# Runtime-editable config (admin overrides, not source)
+runtime_config.json
+
 # Node
 node_modules/
 dist/
