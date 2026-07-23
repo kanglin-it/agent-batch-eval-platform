@@ -423,7 +423,7 @@ onMounted(() => {
     <div class="panel list-panel">
       <div class="list-header">
         <div class="list-title">
-          <span>用例列表（共 {{ total }} 条）</span>
+          <span>用例列表</span>
           <el-button link type="primary" @click="toggleSelectAll">
             {{ allSelected ? '取消全选' : '全部选中' }}
           </el-button>
