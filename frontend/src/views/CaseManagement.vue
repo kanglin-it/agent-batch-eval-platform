@@ -535,7 +535,7 @@ onMounted(() => {
         >
           »
         </button>
-        <span class="pager-summary">共 {{ totalPages }} 页 / {{ total }} 条</span>
+        <span class="pager-summary">第 {{ page.current }} 页 / 共 {{ totalPages }} 页</span>
       </div>
     </div>
 
