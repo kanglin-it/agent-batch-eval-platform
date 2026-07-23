@@ -14,19 +14,18 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Authenticate against the Django ops-backend user table.
+    """Authenticate against the ops-platform user table (login by phone).
 
-    We only READ the user row and verify the plaintext against Django's stored
+    We only READ the user row and verify the plaintext against the stored Django
     hash — no Django runtime and no SECRET_KEY required.
     """
-    result = await db.execute(select(User).where(User.username == body.username))
-    print('--------------1', result, User, User.username, body.username)
+    result = await db.execute(select(User).where(User.phone == body.phone))
     user = result.scalar_one_or_none()
-    print('--------------2', user)
+
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "账号不存在或已被禁用")
     if not verify_password(body.password, user.password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "手机号或密码错误")
 
     # Effective login lifetime resolved at login time (config file -> env default).
     ttl_seconds = get_login_ttl()
@@ -35,6 +34,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         ttl_seconds=ttl_seconds,
         extra={
             "username": user.username,
+            "phone": user.phone,
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
         },
