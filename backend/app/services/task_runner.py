@@ -11,12 +11,14 @@ the external calls (`_run_agent`, `_compare`) are stubs to wire up once the Agen
 and Coze contracts + metric definitions are confirmed.
 """
 import asyncio
+import json
 import logging
 
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
+from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +94,23 @@ async def _stage_compare(case: EvalTaskCase) -> None:
     case.stage = CaseStage.compared
 
 
-# --------- external integrations (stubs) ---------
+# --------- external integrations ---------
 async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
-    """Call the new Agent. For 合同审查, pass question + files + 持方页(stance) info;
-    for other functions, question + files. Returns (output, latency_ms)."""
-    raise NotImplementedError("Wire up the Agent API once its contract is confirmed")
+    """Rerun a case through the Zhiexa sandbox Agent (create execution task).
+
+    For 合同审查, the 持方页(stance) info is appended to the message; files (case.files)
+    still need to be fetched from OSS and re-uploaded — see TODO below.
+    Returns (output, latency_ms).
+    """
+    message = case.question or ""
+    if case.stance:
+        stance = case.stance if isinstance(case.stance, str) else json.dumps(case.stance, ensure_ascii=False)
+        message = f"{message}\n\n[审查立场/持方页]\n{stance}"
+
+    # TODO: case.files are OSS references; to send them, download the bytes and pass
+    #   files=[(name, data, content_type), ...] to execute(). Text-only for now.
+    result = await get_zhiexa_client().execute(message=message, files=None)
+    return result["output"], result["latency_ms"]
 
 
 async def _compare(case: EvalTaskCase) -> dict:

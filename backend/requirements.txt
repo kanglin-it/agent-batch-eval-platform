@@ -12,6 +12,9 @@ asyncpg==0.30.0        # case-data DB (PostgreSQL 'saas')
 passlib[bcrypt,argon2]==1.7.4
 pyjwt==2.10.1
 
+# HTTP client for the Zhiexa Agent integration (SSE streaming)
+httpx==0.28.1
+
 # Config / validation
 pydantic==2.10.4
 pydantic-settings==2.7.1
