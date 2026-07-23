@@ -1,0 +1,18 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Data / ORM
+sqlalchemy[asyncio]==2.0.36
+# DB driver — pick the one matching your Django database:
+aiomysql==0.2.0        # MySQL / MariaDB
+# asyncpg==0.30.0      # PostgreSQL
+
+# Auth: verify Django password hashes + issue our own JWT
+passlib[bcrypt,argon2]==1.7.4
+pyjwt==2.10.1
+
+# Config / validation
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-multipart==0.0.20

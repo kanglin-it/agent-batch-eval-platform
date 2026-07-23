@@ -1,0 +1,92 @@
+"""Evaluation domain models owned by THIS platform.
+
+These live in the same database but in new tables (prefixed `eval_`) so we never
+mutate the ops backend's schema.
+"""
+import datetime as dt
+import enum
+
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.session import Base
+
+
+class TaskStatus(str, enum.Enum):
+    agent_running = "agent_running"      # Agent 执行中 (x/N)
+    comparing = "comparing"              # 对比评测中 (x/N)
+    completed = "completed"              # 已完成 (N/N)
+    failed = "failed"                    # 失败（可重试）
+
+
+class CaseStage(str, enum.Enum):
+    pending = "pending"
+    agent_done = "agent_done"
+    compared = "compared"
+    failed = "failed"
+
+
+class EvalTask(Base):
+    __tablename__ = "eval_task"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    eval_workflow_id: Mapped[str] = mapped_column(String(100))   # Coze workflow id
+    eval_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # reserved (P1)
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.agent_running)
+    creator: Mapped[str] = mapped_column(String(150))
+
+    # Snapshot of the filter used, so the "用例范围" can be shown later.
+    filter_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Aggregated metrics
+    win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hallucination_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=lambda: dt.datetime.now(dt.timezone.utc))
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=lambda: dt.datetime.now(dt.timezone.utc), onupdate=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+    cases: Mapped[list["EvalTaskCase"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+
+
+class EvalTaskCase(Base):
+    __tablename__ = "eval_task_case"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("eval_task.id"), index=True)
+
+    # Reference back to the source case in the SaaS user-behavior table.
+    source_case_id: Mapped[str] = mapped_column(String(100), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    files: Mapped[list] = mapped_column(JSON, default=list)
+    stance: Mapped[str | None] = mapped_column(Text, nullable=True)   # 持方页/中间页 info (合同审查)
+
+    # Agent rerun result
+    agent_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Historical baseline = the answer the SaaS system originally returned
+    baseline_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Comparison outcome
+    compare_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_win: Mapped[bool | None] = mapped_column(nullable=True)
+    hallucination: Mapped[bool | None] = mapped_column(nullable=True)
+
+    stage: Mapped[CaseStage] = mapped_column(Enum(CaseStage), default=CaseStage.pending)
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    task: Mapped["EvalTask"] = relationship(back_populates="cases")
