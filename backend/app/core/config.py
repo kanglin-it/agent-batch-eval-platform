@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     # JWT — this platform's own token, unrelated to Django SECRET_KEY
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
-    jwt_expire_hours: int = 8
+    # Default login-session lifetime. Env value is only the DEFAULT; the effective
+    # value is read at login time and can be overridden at runtime via the
+    # platform_setting table (see services/settings_service.py). 30 days = 2592000s.
+    login_ttl_seconds: int = 2592000
 
     # CORS
     cors_origins: str = "http://localhost:5173"

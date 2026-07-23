@@ -7,6 +7,7 @@ from app.core.security import create_access_token, verify_password
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
+from app.services.settings_service import get_login_ttl
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -26,15 +27,18 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not verify_password(body.password, user.password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
 
+    # Effective login lifetime resolved at login time (runtime setting -> env default).
+    ttl_seconds = await get_login_ttl(db)
     token = create_access_token(
         subject=str(user.id),
+        ttl_seconds=ttl_seconds,
         extra={
             "username": user.username,
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
         },
     )
-    return TokenResponse(access_token=token)
+    return TokenResponse(access_token=token, expires_in=ttl_seconds)
 
 
 @router.get("/me", response_model=CurrentUser)

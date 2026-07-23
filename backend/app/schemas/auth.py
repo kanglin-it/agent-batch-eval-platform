@@ -9,6 +9,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    expires_in: int | None = None  # login-session lifetime in seconds
 
 
 class CurrentUser(BaseModel):

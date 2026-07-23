@@ -37,12 +37,16 @@ def verify_password(plain: str, django_hash: str) -> bool:
         return False
 
 
-def create_access_token(*, subject: str, extra: dict | None = None) -> str:
+def create_access_token(*, subject: str, ttl_seconds: int | None = None, extra: dict | None = None) -> str:
+    """Issue a JWT. `ttl_seconds` is the effective login-session lifetime resolved
+    at login time (runtime setting -> env default); falls back to the env default."""
+    if ttl_seconds is None:
+        ttl_seconds = settings.login_ttl_seconds
     now = dt.datetime.now(dt.timezone.utc)
     payload = {
         "sub": subject,
         "iat": now,
-        "exp": now + dt.timedelta(hours=settings.jwt_expire_hours),
+        "exp": now + dt.timedelta(seconds=ttl_seconds),
     }
     if extra:
         payload.update(extra)

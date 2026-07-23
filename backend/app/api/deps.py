@@ -26,3 +26,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
         is_staff=payload.get("is_staff", False),
         is_superuser=payload.get("is_superuser", False),
     )
+
+
+async def get_current_superuser(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Restrict an endpoint to Django superusers (used for platform settings)."""
+    if not current.is_superuser:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "需要超级管理员权限")
+    return current

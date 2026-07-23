@@ -20,6 +20,7 @@ function onLogout() {
       <el-menu :default-active="route.name as string" router>
         <el-menu-item index="cases" :route="{ name: 'cases' }">用例管理</el-menu-item>
         <el-menu-item index="tasks" :route="{ name: 'tasks' }">任务管理</el-menu-item>
+        <el-menu-item index="settings" :route="{ name: 'settings' }">系统设置</el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>

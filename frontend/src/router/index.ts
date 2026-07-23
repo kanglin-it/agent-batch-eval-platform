@@ -28,6 +28,12 @@ const router = createRouter({
           component: () => import('@/views/TaskManagement.vue'),
           meta: { title: '任务管理' },
         },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/Settings.vue'),
+          meta: { title: '系统设置' },
+        },
       ],
     },
   ],
