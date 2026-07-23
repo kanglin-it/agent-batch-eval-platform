@@ -46,12 +46,6 @@ class Settings:
             except (configparser.Error, ValueError):
                 return default
 
-        def b(sec: str, key: str, default: bool) -> bool:
-            try:
-                return cp.getboolean(sec, key)
-            except (configparser.Error, ValueError):
-                return default
-
         # ---- login database (PostgreSQL; holds the user table for /api/auth/login) ----
         db_host = s("database", "host", "127.0.0.1")
         db_port = i("database", "port", 5432)
@@ -80,7 +74,6 @@ class Settings:
         # ---- app ----
         self.runtime_config_path = s("app", "runtime_config_path", "runtime_config.json")
         self.cors_origins = s("app", "cors_origins", "http://localhost:5173")
-        self.dev_login_enabled = b("app", "dev_login_enabled", False)
 
         # ---- Zhiexa Agent ----
         self.zhiexa_login_url = s("zhiexa", "login_url",

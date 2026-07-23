@@ -34,8 +34,6 @@ login_ttl_seconds = 2592000
 [app]
 runtime_config_path = runtime_config.json
 cors_origins = http://localhost:5173
-# 本地预览用: true 时任意账号密码即可登录(超管)。上线务必 false。
-dev_login_enabled = false
 
 [zhiexa]
 login_url = https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login
