@@ -36,9 +36,12 @@ runtime_config_path = runtime_config.json
 cors_origins = http://localhost:5173
 
 [auth]
-# 登录走运营平台密码接口(code=200 即成功), 比本地校验 Django 哈希快很多。
+# 登录走运营平台密码接口(code=200 即成功), 比本地校验 Django 哈希快很多;
+# 验证通过后再查 t_operation_user 拿用户信息。
 login_url = https://operation.zhiexa.com/zhiexa/operation/api/v1/user/login/password/
 login_timeout = 15
+# 超管手机号白名单(逗号分隔); 只有这些手机号能改「系统设置」。
+admin_phones = 15067062596
 
 [zhiexa]
 login_url = https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login

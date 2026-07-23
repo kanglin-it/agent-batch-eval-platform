@@ -81,6 +81,10 @@ class Settings:
             "https://operation.zhiexa.com/zhiexa/operation/api/v1/user/login/password/",
         )
         self.operation_login_timeout = i("auth", "login_timeout", 15)
+        # Only these phones get superuser (可改「系统设置」). Comma-separated.
+        self.admin_phones = [
+            p.strip() for p in s("auth", "admin_phones", "15067062596").split(",") if p.strip()
+        ]
 
         # ---- Zhiexa Agent ----
         self.zhiexa_login_url = s("zhiexa", "login_url",
