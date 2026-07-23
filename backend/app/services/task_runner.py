@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 # Protect downstream Agent/Coze services from 500 concurrent calls.
 CONCURRENCY = 5
 
+# Fixed agent prompts for review modules (question/task_name is not the user command).
+REVIEW_AGENT_PROMPTS = {
+    "file_review": "请帮我审查一下这份文件",
+    "contract_review": "请帮我审查一下这份合同",
+}
+
 
 async def run_task(task_id: int) -> None:
     async with SessionLocal() as db:
@@ -38,6 +44,18 @@ async def run_task(task_id: int) -> None:
         # ---- Stage 1: Agent 执行 ----
         task.status = TaskStatus.agent_running
         await db.commit()
+        # Warm JWT once before fan-out so concurrent cases don't race on auth.
+        try:
+            await get_zhiexa_client().get_jwt()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("zhiexa auth failed before agent stage")
+            for c in cases:
+                if c.stage not in (CaseStage.agent_done, CaseStage.compared):
+                    c.stage = CaseStage.failed
+                    c.error_msg = f"zhiexa auth failed: {exc or type(exc).__name__}"
+            task.status = TaskStatus.failed
+            await db.commit()
+            return
         await _run_stage(db, cases, sem, _stage_agent)
 
         # ---- Stage 2: 对比评测 ----
@@ -66,7 +84,7 @@ async def _run_stage(db, cases, sem, worker) -> None:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("case %s failed", case.id)
                 case.stage = CaseStage.failed
-                case.error_msg = str(exc)
+                case.error_msg = str(exc) or type(exc).__name__
 
     await asyncio.gather(*(guarded(c) for c in cases))
     await db.commit()
@@ -95,17 +113,45 @@ async def _stage_compare(case: EvalTaskCase) -> None:
 
 
 # --------- external integrations ---------
+def _contract_review_message(stance_raw) -> str:
+    """Build fixed contract-review prompt with human-readable 持方页 fields."""
+    stance = stance_raw
+    if isinstance(stance_raw, str):
+        try:
+            stance = json.loads(stance_raw)
+        except (TypeError, ValueError):
+            stance = {}
+    if not isinstance(stance, dict):
+        stance = {}
+
+    subject = stance.get("subject") or ""
+    review_people = stance.get("review_people") or ""
+    review_stance = stance.get("review_stance") or ""
+    review_status = stance.get("review_status") or ""
+    custom_require = stance.get("custom_require")
+    if custom_require is None:
+        custom_require = ""
+
+    return (
+        f'请帮我审查一下这份合同 ，审查主体是："{review_stance}"，'
+        f'主体名称为："{subject}"，审阅人："{review_people}"，'
+        f'审查立场是："{review_status}"， 自定义审查要求为："{custom_require}"'
+    )
+
+
 async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
     """Rerun a case through the Zhiexa sandbox Agent (create execution task).
 
-    For 合同审查, the 持方页(stance) info is appended to the message; files (case.files)
-    still need to be fetched from OSS and re-uploaded — see TODO below.
+    For 合同审查 / 文件审查, the user-facing command is a fixed prompt (files carry
+    the real payload). 合同审查 appends 持方页 fields in plain Chinese.
     Returns (output, latency_ms).
     """
-    message = case.question or ""
-    if case.stance:
-        stance = case.stance if isinstance(case.stance, str) else json.dumps(case.stance, ensure_ascii=False)
-        message = f"{message}\n\n[审查立场/持方页]\n{stance}"
+    if case.source == "contract_review":
+        message = _contract_review_message(case.stance)
+    elif case.source in REVIEW_AGENT_PROMPTS:
+        message = REVIEW_AGENT_PROMPTS[case.source]
+    else:
+        message = case.question or ""
 
     # TODO: case.files are OSS references; to send them, download the bytes and pass
     #   files=[(name, data, content_type), ...] to execute(). Text-only for now.

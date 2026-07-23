@@ -10,6 +10,8 @@ Usage:
 """
 import asyncio
 
+from sqlalchemy import text
+
 from app.db.session import Base, engine  # noqa: F401
 from app.models.eval_task import EvalTask, EvalTaskCase  # noqa: F401
 
@@ -19,6 +21,10 @@ OWNED_TABLES = [EvalTask.__table__, EvalTaskCase.__table__]
 async def main() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=OWNED_TABLES)
+        # Lightweight upgrades for existing local DBs (create_all won't ALTER).
+        await conn.execute(text(
+            "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS source VARCHAR(32)"
+        ))
     print("Created tables:", ", ".join(t.name for t in OWNED_TABLES))
 
 

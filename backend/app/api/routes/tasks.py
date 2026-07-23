@@ -51,6 +51,7 @@ async def create_task(
     task.cases = [
         EvalTaskCase(
             source_case_id=cid,
+            source=data.get(cid, {}).get("source"),
             question=data.get(cid, {}).get("question", ""),
             files=data.get(cid, {}).get("files", []),
             stance=data.get(cid, {}).get("stance"),

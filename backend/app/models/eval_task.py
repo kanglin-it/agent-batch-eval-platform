@@ -90,6 +90,7 @@ class EvalTaskCase(Base):
 
     # Reference back to the source case in the SaaS user-behavior table.
     source_case_id: Mapped[str] = mapped_column(String(100), index=True)
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)  # legal_research / file_review / …
     question: Mapped[str] = mapped_column(Text)
     files: Mapped[list] = mapped_column(JSON, default=list)
     stance: Mapped[str | None] = mapped_column(Text, nullable=True)   # 持方页/中间页 info (合同审查)

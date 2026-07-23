@@ -57,16 +57,37 @@ class ZhiexaClient:
             raise RuntimeError(f"zhiexa sso exchange failed: {data}")
         return data["token"]
 
-    async def get_jwt(self) -> str:
+    async def get_jwt(self, *, force: bool = False) -> str:
+        """Return cached JWT, refreshing with retries on transient network errors."""
         async with self._lock:
-            if self._jwt and time.time() < self._jwt_exp:
+            if not force and self._jwt and time.time() < self._jwt_exp:
                 return self._jwt
-            async with httpx.AsyncClient(timeout=30) as client:
-                satoken = await self._get_satoken(client)
-                jwt = await self._exchange_jwt(client, satoken)
-            self._jwt = jwt
-            self._jwt_exp = time.time() + settings.zhiexa_jwt_ttl_seconds
-            return jwt
+
+            last_exc: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        satoken = await self._get_satoken(client)
+                        jwt = await self._exchange_jwt(client, satoken)
+                    self._jwt = jwt
+                    self._jwt_exp = time.time() + settings.zhiexa_jwt_ttl_seconds
+                    return jwt
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    last_exc = exc
+                    self._jwt = None
+                    self._jwt_exp = 0.0
+                    logger.warning(
+                        "zhiexa JWT exchange failed (attempt %s/3): %s",
+                        attempt, exc or type(exc).__name__,
+                    )
+                    if attempt < 3:
+                        await asyncio.sleep(0.5 * attempt)
+            assert last_exc is not None
+            raise last_exc
+
+    def invalidate_jwt(self) -> None:
+        self._jwt = None
+        self._jwt_exp = 0.0
 
     # ---------- file upload (presign -> PUT OSS -> confirm) ----------
     async def _upload_file(
@@ -97,7 +118,7 @@ class ZhiexaClient:
     # ---------- create execution task = POST /api/chat (SSE) ----------
     async def execute(
         self, message: str, files: list[tuple[str, bytes, str]] | None = None,
-        conversation_id: str | None = None,
+        conversation_id: str | None = None, *, _auth_retry: bool = True,
     ) -> dict:
         """Run one Agent task. `files` = list of (filename, bytes, content_type).
         Returns {output, conversation_id, latency_ms}."""
@@ -112,30 +133,47 @@ class ZhiexaClient:
                 uploaded.append(await self._upload_file(client, headers, cid, filename, data, ctype))
 
             texts: list[str] = []
-            async with client.stream(
-                "POST", f"{settings.zhiexa_skill_base}/api/chat", headers=headers,
-                json={"conversation_id": cid, "message": message, "uploaded_files": uploaded},
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if not payload:
-                        continue
-                    try:
-                        evt = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-                    etype = evt.get("type") or evt.get("event")
-                    if etype == "conversation":
-                        cid = evt.get("conversation_id") or evt.get("id") or cid
-                    elif etype in ("text", "message", "answer") or "content" in evt:
-                        chunk = evt.get("content") or evt.get("text") or evt.get("delta")
-                        if isinstance(chunk, str):
-                            texts.append(chunk)
-                    elif etype == "done":
-                        break
+            try:
+                async with client.stream(
+                    "POST", f"{settings.zhiexa_skill_base}/api/chat", headers=headers,
+                    json={"conversation_id": cid, "message": message, "uploaded_files": uploaded},
+                ) as resp:
+                    if resp.status_code == 401 and _auth_retry:
+                        self.invalidate_jwt()
+                        raise httpx.HTTPStatusError(
+                            "Unauthorized", request=resp.request, response=resp,
+                        )
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload:
+                            continue
+                        try:
+                            evt = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                        etype = evt.get("type") or evt.get("event")
+                        if etype == "conversation":
+                            cid = evt.get("conversation_id") or evt.get("id") or cid
+                        elif etype in ("text", "message", "answer") or "content" in evt:
+                            chunk = evt.get("content") or evt.get("text") or evt.get("delta")
+                            if isinstance(chunk, str):
+                                texts.append(chunk)
+                        elif etype == "done":
+                            break
+            except httpx.HTTPStatusError as exc:
+                if (
+                    _auth_retry
+                    and exc.response is not None
+                    and exc.response.status_code == 401
+                ):
+                    self.invalidate_jwt()
+                    return await self.execute(
+                        message=message, files=files, conversation_id=cid, _auth_retry=False,
+                    )
+                raise
 
         return {"output": "".join(texts), "conversation_id": cid,
                 "latency_ms": int((time.monotonic() - start) * 1000)}
