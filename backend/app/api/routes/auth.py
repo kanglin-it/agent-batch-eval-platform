@@ -20,8 +20,9 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     hash — no Django runtime and no SECRET_KEY required.
     """
     result = await db.execute(select(User).where(User.username == body.username))
+    print('--------------1', result, User, User.username, body.username)
     user = result.scalar_one_or_none()
-
+    print('--------------2', user)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "账号不存在或已被禁用")
     if not verify_password(body.password, user.password):
