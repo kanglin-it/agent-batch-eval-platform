@@ -38,3 +38,9 @@ class CaseItem(BaseModel):
 class CasePage(BaseModel):
     total: int
     items: list[CaseItem]
+
+
+class CaseIdsResponse(BaseModel):
+    total: int              # 命中总数
+    ids: list[str]          # 命中的 task_id（最多 500）
+    capped: bool            # total 是否超过 500 上限

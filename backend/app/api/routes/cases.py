@@ -15,7 +15,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.db.case_session import get_case_db
 from app.schemas.auth import CurrentUser
-from app.schemas.case import CaseFilter, CaseItem, CasePage
+from app.schemas.case import CaseFilter, CaseIdsResponse, CaseItem, CasePage
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
@@ -104,6 +104,27 @@ async def list_cases(
     ).mappings().all()
 
     return CasePage(total=total, items=[_to_item(r) for r in rows])
+
+
+@router.post("/ids", response_model=CaseIdsResponse)
+async def list_case_ids(
+    filters: CaseFilter,
+    db: AsyncSession = Depends(get_case_db),
+    _: CurrentUser = Depends(get_current_user),
+):
+    """Return all task_ids matching the filter for cross-page "全部选中", capped at 500."""
+    _, params = _where(filters)
+    body = _select_body(filters)
+    cte = _union_cte()
+
+    total = (await db.execute(text(f"{cte} SELECT count(*) FROM ({body}) AS c"), params)).scalar_one()
+    ids = (
+        await db.execute(
+            text(f"{cte} SELECT task_id FROM ({body}) AS d ORDER BY d.src_created DESC LIMIT :limit"),
+            {**params, "limit": CASE_SELECTION_LIMIT},
+        )
+    ).scalars().all()
+    return CaseIdsResponse(total=total, ids=list(ids), capped=total > CASE_SELECTION_LIMIT)
 
 
 _RATING = {1: "good", 0: "bad"}
