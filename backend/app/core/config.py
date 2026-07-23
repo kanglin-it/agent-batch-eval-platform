@@ -75,6 +75,13 @@ class Settings:
         self.runtime_config_path = s("app", "runtime_config_path", "runtime_config.json")
         self.cors_origins = s("app", "cors_origins", "http://localhost:5173")
 
+        # ---- login (ops-platform password API; fast, replaces local hash verify) ----
+        self.operation_login_url = s(
+            "auth", "login_url",
+            "https://operation.zhiexa.com/zhiexa/operation/api/v1/user/login/password/",
+        )
+        self.operation_login_timeout = i("auth", "login_timeout", 15)
+
         # ---- Zhiexa Agent ----
         self.zhiexa_login_url = s("zhiexa", "login_url",
                                   "https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login")
