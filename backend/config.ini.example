@@ -45,9 +45,14 @@ admin_phones = 15067062596
 
 [zhiexa]
 login_url = https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login
-skill_base = https://skill.zhiexa.com
+skill_base = https://staging-skill.zhiexa.com
 phone = 15067062596
 password = your-zhiexa-password
 channel_type = PC
 jwt_ttl_seconds = 518400
 chat_timeout = 300
+
+[crypt]
+# SaaS OSS 审查文件 AES 密钥(与线上一致; 多环境可配主密钥, 代码内仍有候选回退)
+file_key = 55c897adcf75ed57909eb3ca909b7659
+iv = 1969735b2fcac313063827dc5fcd0cb4

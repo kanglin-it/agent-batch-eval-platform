@@ -89,12 +89,28 @@ class Settings:
         # ---- Zhiexa Agent ----
         self.zhiexa_login_url = s("zhiexa", "login_url",
                                   "https://www.zhiexa.com/zhiexa/saas/api/v1/auth/password/login")
-        self.zhiexa_skill_base = s("zhiexa", "skill_base", "https://skill.zhiexa.com")
+        self.zhiexa_skill_base = s("zhiexa", "skill_base", "https://staging-skill.zhiexa.com")
         self.zhiexa_phone = s("zhiexa", "phone")
         self.zhiexa_password = s("zhiexa", "password")
         self.zhiexa_channel_type = s("zhiexa", "channel_type", "PC")
         self.zhiexa_jwt_ttl_seconds = i("zhiexa", "jwt_ttl_seconds", 518400)
         self.zhiexa_chat_timeout = i("zhiexa", "chat_timeout", 300)
+
+        # ---- SaaS OSS file AES (encrypted .txt objects on review modules) ----
+        # Keys mirror scripts/export_history_seed_sql.py candidates.
+        primary_key = s("crypt", "file_key", "55c897adcf75ed57909eb3ca909b7659")
+        primary_iv = s("crypt", "iv", "1969735b2fcac313063827dc5fcd0cb4")
+        candidates = [
+            (primary_key, primary_iv),
+            ("55c897adcf75ed57909eb3ca909b7659", "1969735b2fcac313063827dc5fcd0cb4"),
+            ("9352cd03eb310dea14b2d43de7e1c188", "8591e40e6f381a9c3ed8c153fa15369b"),
+        ]
+        seen: set[tuple[str, str]] = set()
+        self.aes_key_candidates: list[tuple[str, str]] = []
+        for pair in candidates:
+            if pair not in seen:
+                seen.add(pair)
+                self.aes_key_candidates.append(pair)
 
     @property
     def cors_origin_list(self) -> list[str]:

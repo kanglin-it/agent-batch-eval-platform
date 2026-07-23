@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
+from app.services.oss_file import prepare_agent_files
 from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ async def _stage_compare(case: EvalTaskCase) -> None:
 
 # --------- external integrations ---------
 def _contract_review_message(stance_raw) -> str:
-    """Build fixed contract-review prompt with human-readable 持方页 fields."""
+    """Build contract-review Agent command from 持方页 fields."""
     stance = stance_raw
     if isinstance(stance_raw, str):
         try:
@@ -124,26 +125,29 @@ def _contract_review_message(stance_raw) -> str:
     if not isinstance(stance, dict):
         stance = {}
 
-    subject = stance.get("subject") or ""
-    review_people = stance.get("review_people") or ""
     review_stance = stance.get("review_stance") or ""
+    subject = stance.get("subject") or ""
     review_status = stance.get("review_status") or ""
     custom_require = stance.get("custom_require")
     if custom_require is None:
         custom_require = ""
+    else:
+        custom_require = str(custom_require).strip()
 
-    return (
-        f'请帮我审查一下这份合同 ，审查主体是："{review_stance}"，'
-        f'主体名称为："{subject}"，审阅人："{review_people}"，'
-        f'审查立场是："{review_status}"， 自定义审查要求为："{custom_require}"'
+    message = (
+        f"@合同审查 【审查立场】{review_stance}（{subject}） "
+        f"【审查力度】{review_status}审查"
     )
+    if custom_require:
+        message = f"{message} 【审查要求】{custom_require}"
+    return message
 
 
 async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
     """Rerun a case through the Zhiexa sandbox Agent (create execution task).
 
-    For 合同审查 / 文件审查, the user-facing command is a fixed prompt (files carry
-    the real payload). 合同审查 appends 持方页 fields in plain Chinese.
+    For 合同审查 / 文件审查, the user-facing command is a fixed prompt; files are
+    downloaded from SaaS OSS (AES-decrypt when needed) and re-uploaded to Agent.
     Returns (output, latency_ms).
     """
     if case.source == "contract_review":
@@ -153,9 +157,8 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
     else:
         message = case.question or ""
 
-    # TODO: case.files are OSS references; to send them, download the bytes and pass
-    #   files=[(name, data, content_type), ...] to execute(). Text-only for now.
-    result = await get_zhiexa_client().execute(message=message, files=None)
+    files = await prepare_agent_files(case.files)
+    result = await get_zhiexa_client().execute(message=message, files=files or None)
     return result["output"], result["latency_ms"]
 
 
