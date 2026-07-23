@@ -1,7 +1,7 @@
 import http from './http'
 
 export interface LoginPayload {
-  username: string
+  phone: string
   password: string
 }
 

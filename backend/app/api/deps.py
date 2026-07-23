@@ -23,6 +23,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
     return CurrentUser(
         id=int(payload["sub"]),
         username=payload.get("username", ""),
+        phone=payload.get("phone"),
         is_staff=payload.get("is_staff", False),
         is_superuser=payload.get("is_superuser", False),
     )

@@ -16,6 +16,7 @@ class User(Base):
     __tablename__ = settings.user_table
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    phone: Mapped[str] = mapped_column(String(30), unique=True)  # login identifier
     username: Mapped[str] = mapped_column(String(150), unique=True)
     password: Mapped[str] = mapped_column(String(128))  # Django hash string
     email: Mapped[str] = mapped_column(String(254), default="")

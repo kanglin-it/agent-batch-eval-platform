@@ -9,18 +9,18 @@ const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
-const form = reactive({ username: '', password: '' })
+const form = reactive({ phone: '', password: '' })
 const loading = ref(false)
 
 async function onSubmit() {
-  if (!form.username || !form.password) {
-    ElMessage.warning('请输入用户名和密码')
+  if (!form.phone || !form.password) {
+    ElMessage.warning('请输入手机号和密码')
     return
   }
   loading.value = true
   try {
-    // Uses the existing Django ops-backend account/password.
-    await auth.login({ username: form.username, password: form.password })
+    // Uses the existing ops-platform account (login by phone).
+    await auth.login({ phone: form.phone, password: form.password })
     const redirect = (route.query.redirect as string) || '/cases'
     router.replace(redirect)
   } catch {
@@ -35,10 +35,10 @@ async function onSubmit() {
   <div class="login-wrap">
     <el-card class="login-card">
       <h2 class="title">Agent 批量评测平台</h2>
-      <p class="subtitle">使用运营后台账号登录</p>
+      <p class="subtitle">使用运营平台账号登录</p>
       <el-form label-position="top" @submit.prevent="onSubmit">
-        <el-form-item label="用户名">
-          <el-input v-model="form.username" placeholder="运营后台用户名" />
+        <el-form-item label="手机号">
+          <el-input v-model="form.phone" placeholder="运营平台手机号" />
         </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" show-password placeholder="密码" @keyup.enter="onSubmit" />
