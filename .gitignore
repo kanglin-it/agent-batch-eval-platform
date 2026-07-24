@@ -7,7 +7,7 @@ venv/
 .env
 
 # Backend config (holds credentials) + runtime overrides
-# config.ini
+config.ini
 runtime_config.json
 
 # Node
