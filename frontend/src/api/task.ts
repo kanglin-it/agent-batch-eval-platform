@@ -26,6 +26,10 @@ export function listTasks() {
   return http.get<TaskListItem[]>('/api/eval-tasks').then((r) => r.data)
 }
 
+export function listWorkflowIds() {
+  return http.get<string[]>('/api/eval-tasks/workflow-ids').then((r) => r.data)
+}
+
 export function createTask(payload: CreateTaskPayload) {
   return http.post<TaskListItem>('/api/eval-tasks', payload).then((r) => r.data)
 }

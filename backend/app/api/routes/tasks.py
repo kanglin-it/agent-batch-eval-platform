@@ -3,7 +3,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -115,6 +115,25 @@ async def retry_task(
     background.add_task(run_task, task.id)
     await db.refresh(task, attribute_names=["cases"])
     return TaskListItem(progress=_progress(task), **_task_fields(task))
+
+
+@router.get("/workflow-ids", response_model=list[str])
+async def list_workflow_ids(
+    db: AsyncSession = Depends(get_db),
+    _: CurrentUser = Depends(get_current_user),
+):
+    """Distinct 历史使用过的 Coze workflow_id, most-recently-used first.
+
+    Feeds the create-task dialog's Workflow dropdown (可下拉选择, 也可手动输入).
+    """
+    stmt = (
+        select(EvalTask.eval_workflow_id)
+        .where(EvalTask.eval_workflow_id.isnot(None), EvalTask.eval_workflow_id != "")
+        .group_by(EvalTask.eval_workflow_id)
+        .order_by(func.max(EvalTask.created_at).desc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return list(rows)
 
 
 @router.get("/{task_id}/download")

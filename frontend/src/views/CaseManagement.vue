@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 
 import http from '@/api/http'
 import { fetchMe } from '@/api/auth'
-import { createTask } from '@/api/task'
+import { createTask, listWorkflowIds } from '@/api/task'
 
 const router = useRouter()
 const SELECTION_LIMIT = 500
@@ -314,6 +314,19 @@ function togglePageSelect(checked: boolean) {
 const dialogVisible = ref(false)
 const taskForm = reactive({ name: '', eval_workflow_id: '', creator: '' })
 const creating = ref(false)
+const workflowIds = ref<string[]>([])
+const workflowLoading = ref(false)
+
+async function loadWorkflowIds() {
+  workflowLoading.value = true
+  try {
+    workflowIds.value = await listWorkflowIds()
+  } catch {
+    workflowIds.value = []
+  } finally {
+    workflowLoading.value = false
+  }
+}
 
 const filterSummary = computed(() => {
   const parts: string[] = []
@@ -343,6 +356,7 @@ async function openCreateDialog() {
   taskForm.name = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
   taskForm.eval_workflow_id = ''
   taskForm.creator = '当前用户'
+  loadWorkflowIds()          // 拉历史 workflow_id 填充下拉（不阻塞弹窗打开）
   try {
     const me = await fetchMe()
     if (me?.username) taskForm.creator = me.username
@@ -596,7 +610,18 @@ onMounted(() => {
 
         <el-form-item required>
           <template #label><span class="req">*</span> 评测标准 Workflow</template>
-          <el-input v-model="taskForm.eval_workflow_id" placeholder="填入Coze工作流ID" />
+          <el-select
+            v-model="taskForm.eval_workflow_id"
+            class="wf-select"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            :loading="workflowLoading"
+            placeholder="选择历史 Workflow 或手动输入 Coze 工作流ID"
+          >
+            <el-option v-for="id in workflowIds" :key="id" :label="id" :value="id" />
+          </el-select>
         </el-form-item>
 
         <el-form-item required>
@@ -788,6 +813,10 @@ onMounted(() => {
   color: #303133;
   font-weight: 500;
   padding-bottom: 6px;
+}
+
+.wf-select {
+  width: 100%;
 }
 
 .req {
