@@ -197,11 +197,19 @@ onUnmounted(() => {
   color: #fff;
 }
 
-.btn-download:hover,
-.btn-download:focus {
+.btn-download:hover:not(:disabled),
+.btn-download:focus:not(:disabled) {
   background: #389e0d;
   border-color: #389e0d;
   color: #fff;
+}
+
+.btn-download:disabled {
+  background: #f5f5f5;
+  border-color: #dcdfe6;
+  color: #c0c4cc;
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .btn-retry {
