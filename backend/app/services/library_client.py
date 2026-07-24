@@ -26,9 +26,27 @@ logger = logging.getLogger(__name__)
 _QUERY_PATH = "/zhiexa/library/api/v1/file/public/query"
 
 
+_ID_KEYS = ("doc_id", "file_id", "fileId", "docId", "id")
+
+
+def _extract_id(x) -> str:
+    """Pull a plain id string out of an element that may be a str or an object.
+
+    doc_ids sometimes stores objects ([{"doc_id": "...", "name": "..."}]) rather
+    than plain id strings; the public query API wants the id string only.
+    """
+    if isinstance(x, dict):
+        for k in _ID_KEYS:
+            v = x.get(k)
+            if v:
+                return str(v).strip()
+        return ""
+    return str(x).strip()
+
+
 def _parse_doc_ids(doc_ids: str | None) -> list[str]:
-    """doc_ids is stored as a JSON id list ('["id1","id2"]'); be tolerant of a
-    bare/comma-separated id too. '', '[]', 'null' mean "no files"."""
+    """doc_ids is stored as a JSON id list ('["id1","id2"]' or '[{"doc_id":...}]');
+    be tolerant of a bare/comma-separated id too. '', '[]', 'null' mean "no files"."""
     if not doc_ids:
         return []
     s = doc_ids.strip()
@@ -40,7 +58,10 @@ def _parse_doc_ids(doc_ids: str | None) -> list[str]:
         # not JSON — treat as comma/whitespace-separated ids
         return [p.strip() for p in s.replace(",", " ").split() if p.strip()]
     if isinstance(parsed, list):
-        return [str(x).strip() for x in parsed if str(x).strip()]
+        return [i for i in (_extract_id(x) for x in parsed) if i]
+    if isinstance(parsed, dict):
+        one = _extract_id(parsed)
+        return [one] if one else []
     if isinstance(parsed, (str, int)):
         return [str(parsed).strip()] if str(parsed).strip() else []
     return []
