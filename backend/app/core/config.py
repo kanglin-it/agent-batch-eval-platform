@@ -101,6 +101,11 @@ class Settings:
         self.coze_api_token = s("coze", "api_token")
         self.coze_timeout = i("coze", "timeout", 120)
 
+        # ---- File-library service (resolve QA doc_ids/project_id -> oss_url) ----
+        self.library_service = s("library", "service")
+        self.library_token = s("library", "token")  # optional Bearer auth
+        self.library_timeout = i("library", "timeout", 20)
+
         # ---- SaaS OSS file AES (encrypted .txt objects) ----
         # Primary + optional file_key_2/iv_2, file_key_3/iv_3 … from [crypt].
         self.aes_key_candidates: list[tuple[str, str]] = []

@@ -7,6 +7,7 @@ from the same 6 live sources used by the case list
 
 Each source query is filtered by `task_id = ANY(:ids)` so we never scan full tables.
 """
+import asyncio
 import json
 
 from sqlalchemy import text
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.case_source import build_hydrate_sql
+from app.services.library_client import resolve_oss_urls
 
 
 async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, dict]:
@@ -25,12 +27,14 @@ async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, di
     rows = (await db.execute(sql, {"ids": task_ids})).mappings().all()
 
     out: dict[str, dict] = {}
+    qa_refs: list[tuple[str, str | None, str | None]] = []  # (task_id, project_id, doc_ids)
     for r in rows:
         if r["kind"] == "qa":
-            # QA attachments are file-library doc_ids, not direct OSS URLs — skip for Agent upload.
+            # QA files are referenced by doc_ids/project_id -> resolve to OSS via library.
             files = []
             stance = None
             baseline = r["system_answer"]
+            qa_refs.append((r["task_id"], r.get("project_id"), r.get("attachment")))
         else:
             files = []
             orig = _as_json(r["original_file"])
@@ -56,6 +60,16 @@ async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, di
             "stance": stance,
             "baseline_answer": baseline,
         }
+
+    # Resolve QA files (doc_ids/project_id -> OSS urls) concurrently via the library.
+    if qa_refs:
+        resolved = await asyncio.gather(
+            *(resolve_oss_urls(pid, dids) for (_, pid, dids) in qa_refs)
+        )
+        for (tid, _, _), fs in zip(qa_refs, resolved):
+            if tid in out and fs:
+                out[tid]["files"] = fs
+
     return out
 
 

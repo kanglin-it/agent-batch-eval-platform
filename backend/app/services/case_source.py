@@ -430,7 +430,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         return f"""
         SELECT 'qa' AS kind, 'legal_research' AS source, t.chat_id AS task_id,
                t.question AS question, t.llm_answer AS system_answer,
-               t.doc_ids AS attachment, NULL::jsonb AS original_file,
+               t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance
         FROM {schema}.t_legal_research_info t
@@ -444,7 +444,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         SELECT 'qa' AS kind, 'document_draft' AS source, t.task_id AS task_id,
                p.prompt_content AS question,
                NULLIF(btrim(regexp_replace(t.result, '^.*?zhiexa_reasoning_end', '', 's')), '') AS system_answer,
-               t.doc_ids AS attachment, NULL::jsonb AS original_file,
+               t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance
         FROM {schema}.t_document_task t
@@ -463,7 +463,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         return f"""
         SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
                h.original_question AS question, {answer} AS system_answer,
-               h.doc_ids AS attachment, NULL::jsonb AS original_file,
+               h.doc_ids AS attachment, h.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance
         FROM {schema}.t_fuxi_history_task h
@@ -480,7 +480,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         return f"""
         SELECT 'review' AS kind, 'contract_review' AS source, t.task_id AS task_id,
                t.task_name AS question, NULL AS system_answer,
-               NULL AS attachment, {orig} AS original_file,
+               NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                {stance} AS stance
         FROM {schema}.t_contract_tasks t
@@ -494,7 +494,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         return f"""
         SELECT 'review' AS kind, 'file_review' AS source, t.task_id AS task_id,
                COALESCE(t.origin_name, t.task_name) AS question, NULL AS system_answer,
-               NULL AS attachment, {orig} AS original_file,
+               NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance
         FROM {schema}.t_file_review_task t
