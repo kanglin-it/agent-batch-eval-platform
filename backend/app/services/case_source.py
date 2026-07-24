@@ -40,6 +40,16 @@ class SourceFilters:
     exclude_failed: bool = True
 
 
+def _doc_ids_has_file(col: str) -> str:
+    """QA 带文件 = doc_ids holds a non-empty JSON id list.
+
+    doc_ids is stored as a JSON string; '', '[]' and 'null' all mean "no file"
+    (matches resolve_oss_urls, which skips '[]'). Plain `<> ''` wrongly reported
+    带文件 for tasks whose doc_ids is the empty array '[]'.
+    """
+    return f"({col} IS NOT NULL AND btrim({col}) NOT IN ('', '[]', 'null'))"
+
+
 def _score_sql(schema: str, source: str, task_key: str) -> str:
     """Scalar subquery: result_score for task (0差/1好/2未知/NULL无反馈)."""
     apps = ", ".join(f"'{a}'" for a in FEEDBACK_APPS[source])
@@ -127,7 +137,7 @@ def build_list_source_sql(
     lim = _limit_sql(per_source_limit)
 
     if source == "legal_research":
-        has_file = "(t.doc_ids IS NOT NULL AND t.doc_ids <> '')"
+        has_file = _doc_ids_has_file("t.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col="t.question",
             task_key="t.chat_id", has_file_expr=has_file, filters=filters, schema=schema,
@@ -151,7 +161,7 @@ def build_list_source_sql(
         return sql, params
 
     if source == "document_draft":
-        has_file = "(t.doc_ids IS NOT NULL AND t.doc_ids <> '')"
+        has_file = _doc_ids_has_file("t.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col="p.prompt_content",
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
@@ -180,7 +190,7 @@ def build_list_source_sql(
         return sql, params
 
     if source in ("case_ai", "law_ai"):
-        has_file = "(h.doc_ids IS NOT NULL AND h.doc_ids <> '')"
+        has_file = _doc_ids_has_file("h.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="h.created_at", question_col="h.original_question",
             task_key="h.task_id", has_file_expr=has_file, filters=filters, schema=schema,
@@ -276,7 +286,7 @@ def build_capped_count_sql(
     lim = int(cap)
 
     if source == "legal_research":
-        has_file = "(t.doc_ids IS NOT NULL AND t.doc_ids <> '')"
+        has_file = _doc_ids_has_file("t.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col="t.question",
             task_key="t.chat_id", has_file_expr=has_file, filters=filters, schema=schema,
@@ -295,7 +305,7 @@ def build_capped_count_sql(
         return sql, params
 
     if source == "document_draft":
-        has_file = "(t.doc_ids IS NOT NULL AND t.doc_ids <> '')"
+        has_file = _doc_ids_has_file("t.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col="p.prompt_content",
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
@@ -318,7 +328,7 @@ def build_capped_count_sql(
         return sql, params
 
     if source in ("case_ai", "law_ai"):
-        has_file = "(h.doc_ids IS NOT NULL AND h.doc_ids <> '')"
+        has_file = _doc_ids_has_file("h.doc_ids")
         extra, params = _pushdown_clauses(
             source, created_col="h.created_at", question_col="h.original_question",
             task_key="h.task_id", has_file_expr=has_file, filters=filters, schema=schema,
