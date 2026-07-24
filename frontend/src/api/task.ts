@@ -34,3 +34,7 @@ export function createTask(payload: CreateTaskPayload) {
 export function retryTask(id: number) {
   return http.post<TaskListItem>(`/api/eval-tasks/${id}/retry`).then((r) => r.data)
 }
+
+export function downloadResultExcel(id: number) {
+  return http.get(`/api/eval-tasks/${id}/download`, { responseType: 'blob' })
+}

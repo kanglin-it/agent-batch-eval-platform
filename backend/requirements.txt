@@ -16,6 +16,9 @@ httpx==0.28.1
 # AES decrypt for SaaS OSS encrypted review files (.txt ciphertext)
 pycryptodome==3.21.0
 
+# Excel export (评测结果 下载)
+openpyxl==3.1.5
+
 # Validation (schemas). Config is read from config.ini via stdlib configparser.
 pydantic==2.10.4
 python-multipart==0.0.20

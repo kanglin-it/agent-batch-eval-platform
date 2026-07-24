@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { listTasks, retryTask, type TaskListItem } from '@/api/task'
+import { downloadResultExcel, listTasks, retryTask, type TaskListItem } from '@/api/task'
 
 const router = useRouter()
 const tasks = ref<TaskListItem[]>([])
@@ -37,8 +37,21 @@ async function onRetry(row: TaskListItem) {
   load()
 }
 
-function onDownload(row: TaskListItem) {
-  ElMessage.info(`下载评测结果 Excel（任务 ${displayId(row)}）功能待接入`)
+async function onDownload(row: TaskListItem) {
+  try {
+    const res = await downloadResultExcel(row.id)
+    const blob = new Blob([res.data], { type: res.headers['content-type'] })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `评测结果_${displayId(row)}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('下载失败')
+  }
 }
 
 function displayId(row: TaskListItem) {

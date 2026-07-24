@@ -1,4 +1,8 @@
+import io
+from urllib.parse import quote
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +14,10 @@ from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.task import CreateTaskRequest, TaskListItem
 from app.services.case_data import fetch_case_data
+from app.services.export_excel import build_result_xlsx
 from app.services.task_runner import run_task
+
+XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter(prefix="/api/eval-tasks", tags=["tasks"])
 
@@ -100,6 +107,28 @@ async def retry_task(
     background.add_task(run_task, task.id)
     await db.refresh(task, attribute_names=["cases"])
     return TaskListItem(progress=_progress(task), **_task_fields(task))
+
+
+@router.get("/{task_id}/download")
+async def download_result(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: CurrentUser = Depends(get_current_user),
+):
+    """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
+    task = await db.get(EvalTask, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    await db.refresh(task, attribute_names=["cases"])
+    cases = sorted(task.cases, key=lambda c: c.id)
+
+    content = build_result_xlsx(task, cases)
+    filename = quote(f"评测结果_{task.name}.xlsx")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=XLSX_MEDIA,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 def _task_fields(t: EvalTask) -> dict:
