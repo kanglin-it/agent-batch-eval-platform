@@ -53,6 +53,7 @@ async def create_task(
         case_count=len(case_ids),
         status=TaskStatus.agent_running,
         creator=(body.creator or current.username).strip() or current.username,
+        creator_phone=current.phone,          # owner key for isolation
         filter_snapshot=body.filter_snapshot,
     )
     task.cases = [
@@ -79,8 +80,16 @@ async def create_task(
 
 
 @router.get("", response_model=list[TaskListItem])
-async def list_tasks(db: AsyncSession = Depends(get_db), _: CurrentUser = Depends(get_current_user)):
-    result = await db.execute(select(EvalTask).order_by(EvalTask.created_at.desc()))
+async def list_tasks(
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    # User isolation: only the tasks the current user created.
+    result = await db.execute(
+        select(EvalTask)
+        .where(EvalTask.creator_phone == current.phone)
+        .order_by(EvalTask.created_at.desc())
+    )
     tasks = result.scalars().unique().all()
     out = []
     for t in tasks:
@@ -94,10 +103,10 @@ async def retry_task(
     task_id: int,
     background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(get_current_user),
 ):
     task = await db.get(EvalTask, task_id)
-    if task is None:
+    if task is None or task.creator_phone != current.phone:
         raise HTTPException(404, "任务不存在")
     if task.status != TaskStatus.failed:
         raise HTTPException(400, "仅失败状态的任务可重试")
@@ -113,11 +122,11 @@ async def retry_task(
 async def download_result(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-    _: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(get_current_user),
 ):
     """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
     task = await db.get(EvalTask, task_id)
-    if task is None:
+    if task is None or task.creator_phone != current.phone:
         raise HTTPException(404, "任务不存在")
     await db.refresh(task, attribute_names=["cases"])
     cases = sorted(task.cases, key=lambda c: c.id)

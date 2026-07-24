@@ -60,7 +60,8 @@ class EvalTask(Base):
     eval_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # reserved (P1)
     case_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[TaskStatus] = mapped_column(_TaskStatusCol, default=TaskStatus.agent_running)
-    creator: Mapped[str] = mapped_column(String(150))
+    creator: Mapped[str] = mapped_column(String(150))          # display name
+    creator_phone: Mapped[str | None] = mapped_column(String(30), index=True)  # owner (isolation)
 
     # Snapshot of the filter used, so the "用例范围" can be shown later.
     filter_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)

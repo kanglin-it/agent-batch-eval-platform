@@ -28,6 +28,12 @@ async def main() -> None:
         await conn.execute(text(
             "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS agent_file_result TEXT"
         ))
+        await conn.execute(text(
+            "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS creator_phone VARCHAR(30)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_eval_task_creator_phone ON eval_task (creator_phone)"
+        ))
     print("Created tables:", ", ".join(t.name for t in OWNED_TABLES))
 
 
