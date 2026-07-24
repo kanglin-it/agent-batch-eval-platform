@@ -1,5 +1,4 @@
 """Connection to the case-data database (PostgreSQL 'saas').
-
 Read-only usage: 用例管理页 queries the history dataset tables here. Kept separate
 from the login database so the two data sources stay decoupled.
 """
