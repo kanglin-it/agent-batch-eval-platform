@@ -96,6 +96,11 @@ class Settings:
         self.zhiexa_jwt_ttl_seconds = i("zhiexa", "jwt_ttl_seconds", 518400)
         self.zhiexa_chat_timeout = i("zhiexa", "chat_timeout", 300)
 
+        # ---- Coze evaluation workflow (Stage 2 对比评测) ----
+        self.coze_api_base = s("coze", "api_base", "https://api.coze.cn")
+        self.coze_api_token = s("coze", "api_token")
+        self.coze_timeout = i("coze", "timeout", 120)
+
         # ---- SaaS OSS file AES (encrypted .txt objects) ----
         # Primary + optional file_key_2/iv_2, file_key_3/iv_3 … from [crypt].
         self.aes_key_candidates: list[tuple[str, str]] = []

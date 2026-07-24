@@ -11,6 +11,7 @@ the external calls (`_run_agent`, `_compare`) are stubs to wire up once the Agen
 and Coze contracts + metric definitions are confirmed.
 """
 import asyncio
+import functools
 import json
 import logging
 
@@ -18,6 +19,7 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
+from app.services.coze_client import run_eval
 from app.services.oss_file import prepare_agent_files
 from app.services.zhiexa_client import get_zhiexa_client
 
@@ -62,7 +64,7 @@ async def run_task(task_id: int) -> None:
         # ---- Stage 2: 对比评测 ----
         task.status = TaskStatus.comparing
         await db.commit()
-        await _run_stage(db, cases, sem, _stage_compare)
+        await _run_stage(db, cases, sem, functools.partial(_stage_compare, workflow_id=task.eval_workflow_id))
 
         # ---- Aggregate ----
         done = [c for c in cases if c.stage == CaseStage.compared]
@@ -101,12 +103,12 @@ async def _stage_agent(case: EvalTaskCase) -> None:
     case.error_msg = None
 
 
-async def _stage_compare(case: EvalTaskCase) -> None:
+async def _stage_compare(case: EvalTaskCase, workflow_id: str) -> None:
     if case.stage == CaseStage.compared:
         return
     if case.stage != CaseStage.agent_done:
         return  # never ran the agent successfully
-    result = await _compare(case)
+    result = await _compare(case, workflow_id)
     case.compare_result = result
     case.is_win = result.get("is_win")
     case.hallucination = result.get("hallucination")
@@ -162,8 +164,53 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
     return result["output"], result["latency_ms"]
 
 
-async def _compare(case: EvalTaskCase) -> dict:
-    """Call the evaluation Coze workflow (task.eval_workflow_id) comparing
-    case.agent_output against case.baseline_answer. Returns metric dict, e.g.
-    {"is_win": True, "hallucination": False, ...}."""
-    raise NotImplementedError("Wire up the Coze workflow once metric definitions are confirmed")
+def _compare_query(case: EvalTaskCase) -> str:
+    """query for the eval workflow: 合同审查 uses the 持方页 info, else the question."""
+    if case.source == "contract_review":
+        stance = case.stance
+        if isinstance(stance, str):
+            try:
+                stance = json.loads(stance)
+            except (TypeError, ValueError):
+                stance = None
+        if isinstance(stance, dict):
+            parts = []
+            if stance.get("review_stance") or stance.get("subject"):
+                parts.append(f"持方：{stance.get('review_stance', '')}（{stance.get('subject', '')}）")
+            if stance.get("review_status"):
+                parts.append(f"审查力度：{stance['review_status']}")
+            if stance.get("custom_require"):
+                parts.append(f"审查要求：{stance['custom_require']}")
+            joined = "。".join(p for p in parts if p)
+            if joined:
+                return joined
+        if isinstance(case.stance, str) and case.stance:
+            return case.stance
+    return case.question or ""
+
+
+async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
+    """Score old (baseline/workflow) vs new (Agent) via the Coze eval workflow.
+
+    old = baseline_answer (SaaS 历史回答), new = agent_output. Win when新版 scores
+    higher. file_result_old/new are the old/new file-parsing outputs — not captured
+    yet, so passed empty for now (TODO). Hallucination is not part of this workflow's
+    output, so it stays unset.
+    """
+    params = {
+        "query": _compare_query(case),
+        "file_result_old": "",   # TODO: 旧版文件解析结果 (from SaaS)
+        "file_result_new": "",   # TODO: 新版文件解析结果 (from Agent run)
+        "answer_old": case.baseline_answer or "",
+        "answer_new": case.agent_output or "",
+    }
+    out = await run_eval(workflow_id, params)
+
+    score_old = out.get("score_old")
+    score_new = out.get("score_new")
+    is_win = (
+        isinstance(score_old, (int, float))
+        and isinstance(score_new, (int, float))
+        and score_new > score_old
+    )
+    return {**out, "is_win": is_win}
