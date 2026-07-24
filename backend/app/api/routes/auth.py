@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token
 from app.core.token_blacklist import revoke
-from app.db.session import get_db
+from app.db.case_session import get_case_db
 from app.models.user import User
 from app.schemas.auth import CurrentUser, LoginRequest, TokenResponse
 from app.services.settings_service import get_login_ttl
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(body: LoginRequest, db: AsyncSession = Depends(get_case_db)):
     """Verify the password via the ops-platform API (fast — no local hashing), then
     read user info from t_operation_user. Superuser is granted only to phones in the
     admin allowlist (config [auth] admin_phones).

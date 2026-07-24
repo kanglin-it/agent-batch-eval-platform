@@ -46,7 +46,7 @@ class Settings:
             except (configparser.Error, ValueError):
                 return default
 
-        # ---- login database (PostgreSQL; holds the user table for /api/auth/login) ----
+        # ---- WRITE database (read-write primary): platform tables (eval_task*) ----
         db_host = s("database", "host", "127.0.0.1")
         db_port = i("database", "port", 5432)
         db_user = s("database", "user")
@@ -55,7 +55,8 @@ class Settings:
         self.user_table = s("database", "user_table", "t_operation_user")
         self.database_url = _pg_url(db_host, db_port, db_user, db_pass, db_name)
 
-        # ---- case database (defaults to the same server as [database]) ----
+        # ---- READ-ONLY database (replica): case data + login user table (t_operation_user).
+        # Point this at the read-only replica; blank fields fall back to [database].
         c_host = s("case_database", "host") or db_host
         c_port = i("case_database", "port", 0) or db_port
         c_user = s("case_database", "user") or db_user
