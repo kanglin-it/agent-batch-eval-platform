@@ -218,25 +218,19 @@ def build_list_source_sql(
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
         )
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
-        if filters.has_file is None:
-            has_file_select = "TRUE"
-            attachment_select = "t.task_name"
-            extra_sql = _and(extra)
-        else:
-            has_file_select = has_file
-            attachment_select = "t.task_name"
-            extra_sql = _and(extra)
+        # Always report the real 带文件 state (EXISTS on t_file_info), even when the
+        # has_file filter is off — otherwise every review task falsely shows 带文件.
         sql = f"""
         SELECT 'review' AS kind, 'contract_review' AS source, t.task_id AS task_id,
                t.task_name AS question, t.created AS src_created,
                {_score_sql(schema, 'contract_review', 't.task_id')} AS result_score,
                NULL::text AS system_answer,
-               {attachment_select} AS attachment,
-               {has_file_select} AS has_file, t.channel_type AS channel_type
+               t.task_name AS attachment,
+               {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
           {status}
-          {extra_sql}
+          {_and(extra)}
         ORDER BY t.created DESC
         {lim}
         """
@@ -250,17 +244,15 @@ def build_list_source_sql(
             task_key="t.task_id", has_file_expr=has_file, filters=filters, schema=schema,
         )
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
-        if filters.has_file is None:
-            has_file_select = "TRUE"
-        else:
-            has_file_select = has_file
+        # Always report the real 带文件 state (EXISTS on t_file_info), even when the
+        # has_file filter is off — otherwise every review task falsely shows 带文件.
         sql = f"""
         SELECT 'review' AS kind, 'file_review' AS source, t.task_id AS task_id,
                {qcol} AS question, t.created AS src_created,
                {_score_sql(schema, 'file_review', 't.task_id')} AS result_score,
                NULL::text AS system_answer,
                {qcol} AS attachment,
-               {has_file_select} AS has_file, t.channel_type AS channel_type
+               {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0
           {status}
