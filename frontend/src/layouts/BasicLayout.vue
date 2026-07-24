@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ArrowDown, Document, List } from '@element-plus/icons-vue'
+import { ArrowDown, Document, Expand, Fold, List } from '@element-plus/icons-vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
@@ -7,6 +8,11 @@ import { useAuthStore } from '@/stores/auth'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+const collapsed = ref(false)
+function toggleSidebar() {
+  collapsed.value = !collapsed.value
+}
 
 async function onLogout() {
   await auth.logout()
@@ -16,11 +22,11 @@ async function onLogout() {
 
 <template>
   <el-container class="layout">
-    <el-aside width="208px" class="aside">
+    <el-aside :width="collapsed ? '0px' : '208px'" class="aside">
       <div class="brand">
         <span class="brand-mark">A</span>
         <span class="brand-text">Agent批量测试平台</span>
-        <el-icon class="brand-caret"><ArrowDown /></el-icon>
+        <el-icon class="brand-caret" title="收起侧边栏" @click="toggleSidebar"><ArrowDown /></el-icon>
       </div>
 
       <nav class="menu">
@@ -45,7 +51,12 @@ async function onLogout() {
 
     <el-container>
       <el-header class="header">
-        <div class="breadcrumb">{{ (route.meta.title as string) || '' }}</div>
+        <div class="header-left">
+          <el-icon class="sidebar-toggle" :title="collapsed ? '展开侧边栏' : '收起侧边栏'" @click="toggleSidebar">
+            <component :is="collapsed ? Expand : Fold" />
+          </el-icon>
+          <div class="breadcrumb">{{ (route.meta.title as string) || '' }}</div>
+        </div>
         <el-button link type="primary" @click="onLogout">退出登录</el-button>
       </el-header>
       <el-main class="main">
@@ -66,6 +77,7 @@ async function onLogout() {
   flex-direction: column;
   background: #001529;
   overflow: hidden;
+  transition: width 0.2s ease;
 }
 
 .brand {
@@ -107,6 +119,10 @@ async function onLogout() {
   flex-shrink: 0;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+.brand-caret:hover {
+  color: #fff;
 }
 
 .menu {
@@ -148,6 +164,21 @@ async function onLogout() {
   padding: 0 24px;
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sidebar-toggle {
+  font-size: 18px;
+  color: #5c6b7a;
+  cursor: pointer;
+}
+.sidebar-toggle:hover {
+  color: #1677ff;
 }
 
 .breadcrumb {
