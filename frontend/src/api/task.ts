@@ -10,7 +10,6 @@ export interface TaskListItem {
   progress: string
   win_rate: number | null
   avg_latency_ms: number | null
-  hallucination_count: number | null
   creator: string
   created_at: string
 }
