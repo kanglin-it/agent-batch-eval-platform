@@ -32,6 +32,7 @@ from app.services.case_source import (
     build_list_source_sql,
     resolve_sources,
 )
+from app.services.library_client import resolve_oss_urls
 from app.services.oss_file import fetch_file_bytes, normalize_file_ref
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,9 @@ async def list_cases(
         merged = _dedup_by_question(merged)
 
     page_rows = merged[offset: offset + page_size]
+    # QA rows only carry doc_ids/project_id — resolve the real file names via the
+    # library so the list shows them instead of a generic 有附件.
+    await _resolve_qa_filenames(page_rows)
     has_more = len(merged) > offset + page_size
     # Avoid full-table COUNT. Expose a lower-bound total so the pager can advance.
     if has_more:
@@ -250,6 +254,38 @@ async def list_case_ids(
     return CaseIdsResponse(total=len(ids), ids=ids, capped=capped)
 
 
+async def _resolve_qa_filenames(rows: list[dict]) -> None:
+    """Populate QA page rows with real file names via the library (best-effort).
+
+    Each QA row references files by doc_ids/project_id; resolve them so the list
+    shows actual file names instead of a generic 有附件. Bounded by page size and an
+    overall timeout so a slow/unavailable library never blocks the list.
+    """
+    targets = [r for r in rows if r.get("kind") == "qa" and r.get("has_file")]
+    if not targets:
+        return
+
+    async def one(r: dict) -> None:
+        try:
+            files = await resolve_oss_urls(r.get("project_id"), r.get("doc_ids"))
+        except Exception:  # noqa: BLE001 — never fail the list over file names
+            logger.exception("resolve QA filenames failed task=%s", r.get("task_id"))
+            files = []
+        r["file_names"] = [f["name"] for f in files if f.get("name")]
+
+    try:
+        await asyncio.wait_for(asyncio.gather(*(one(r) for r in targets)), timeout=10)
+    except asyncio.TimeoutError:
+        logger.warning("QA filename resolution timed out for %d rows", len(targets))
+
+
+def _qa_attachment_display(names: list[str]) -> str | None:
+    """Compact display for the 上传文件 cell: first name, plus 等N个 when multiple."""
+    if not names:
+        return None
+    return names[0] if len(names) == 1 else f"{names[0]} 等{len(names)}个文件"
+
+
 def _score_to_rating(score) -> str:
     # 0=差评, 1=好评, 2=未知, NULL=无反馈 → 未知/无反馈都显示为 none
     if score == 1:
@@ -262,12 +298,17 @@ def _score_to_rating(score) -> str:
 def _to_item(r) -> CaseItem:
     answer = r.get("system_answer")
     score = r.get("result_score")
+    # QA: 展示 library 解析出的真实文件名；review: attachment 由 SQL 给出(任务名)。
+    if r.get("kind") == "qa":
+        attachment = _qa_attachment_display(r.get("file_names") or [])
+    else:
+        attachment = r.get("attachment")
     return CaseItem(
         kind=r["kind"],
         task_id=r["task_id"],
         function_module=r["source"],
         question=r.get("question"),
-        attachment=r.get("attachment"),
+        attachment=attachment,
         has_file=bool(r.get("has_file")),
         result_score=score,
         rating=_score_to_rating(score),

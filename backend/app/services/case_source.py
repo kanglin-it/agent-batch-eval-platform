@@ -148,7 +148,7 @@ def build_list_source_sql(
                t.question AS question, t.created AS src_created,
                {_score_sql(schema, 'legal_research', 't.chat_id')} AS result_score,
                t.llm_answer AS system_answer,
-               CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
+               t.doc_ids AS doc_ids, t.project_id AS project_id,
                {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_legal_research_info t
         WHERE t.is_delete = 0
@@ -174,7 +174,7 @@ def build_list_source_sql(
                p.prompt_content AS question, t.created AS src_created,
                {_score_sql(schema, 'document_draft', 't.task_id')} AS result_score,
                {answer} AS system_answer,
-               CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
+               t.doc_ids AS doc_ids, t.project_id AS project_id,
                {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
@@ -204,11 +204,11 @@ def build_list_source_sql(
         sql = f"""
         SELECT b.kind, b.source, b.task_id, b.question, b.src_created,
                {score} AS result_score, {preview} AS system_answer,
-               b.attachment, b.has_file, b.channel_type
+               b.doc_ids, b.project_id, b.has_file, b.channel_type
         FROM (
             SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
                    h.original_question AS question, h.created_at AS src_created,
-                   CASE WHEN {has_file} THEN '有附件' ELSE NULL END AS attachment,
+                   h.doc_ids AS doc_ids, h.project_id AS project_id,
                    {has_file} AS has_file, h.channel_type AS channel_type
             FROM {schema}.t_fuxi_history_task h
             WHERE h.is_deleted = 0 AND h.type = '{source}'

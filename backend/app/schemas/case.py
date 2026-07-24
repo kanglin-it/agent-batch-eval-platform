@@ -25,7 +25,7 @@ class CaseItem(BaseModel):
     function_module: str | None = None     # 功能模块 (source)
     sub_function: str | None = None        # 二级功能 (dataset 暂无, 预留)
     question: str | None = None            # 用户提问
-    attachment: str | None = None          # 附件 (QA=doc_ids / review=首个文件)
+    attachment: str | None = None          # 附件文件名 (QA=library解析的文件名 / review=任务名)
     has_file: bool = False                 # 是否带文件
     rating: str | None = None              # 好差评: good / bad / none
     result_score: int | None = None        # 原始分: 1好/0差/2未知/None无
