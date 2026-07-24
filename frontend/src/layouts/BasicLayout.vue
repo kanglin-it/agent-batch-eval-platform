@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, Document, Expand, Fold, List } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, ArrowRight, Document, Expand, Fold, List } from '@element-plus/icons-vue'
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -49,6 +49,16 @@ async function onLogout() {
       </nav>
     </el-aside>
 
+    <!-- 悬浮在侧边栏边缘、垂直居中的收起/展开按钮 -->
+    <div
+      class="rail-toggle"
+      :style="{ left: collapsed ? '0px' : '208px' }"
+      :title="collapsed ? '展开侧边栏' : '收起侧边栏'"
+      @click="toggleSidebar"
+    >
+      <el-icon><component :is="collapsed ? ArrowRight : ArrowLeft" /></el-icon>
+    </div>
+
     <el-container>
       <el-header class="header">
         <div class="header-left">
@@ -70,6 +80,29 @@ async function onLogout() {
 .layout {
   height: 100vh;
   background: #f5f5f5;
+  position: relative;
+}
+
+.rail-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  width: 22px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: #5c6b7a;
+  border: 1px solid #e4e7ed;
+  border-radius: 0 8px 8px 0;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  transition: left 0.2s ease, color 0.2s;
+}
+.rail-toggle:hover {
+  color: #1677ff;
 }
 
 .aside {
