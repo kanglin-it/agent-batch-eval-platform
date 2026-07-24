@@ -148,6 +148,41 @@ function formatTime(v?: string) {
   return v.replace('T', ' ').slice(0, 16)
 }
 
+function parseFilename(cd?: string): string {
+  if (!cd) return ''
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd)
+  if (star) {
+    try {
+      return decodeURIComponent(star[1])
+    } catch {
+      return star[1]
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(cd)
+  return plain ? plain[1] : ''
+}
+
+async function onDownloadFiles(row: CaseItem) {
+  try {
+    const res = await http.get('/api/cases/download-files', {
+      params: { task_id: row.task_id },
+      responseType: 'blob',
+    })
+    const filename = parseFilename(res.headers['content-disposition']) || `用例文件_${row.task_id}`
+    const blob = new Blob([res.data], { type: res.headers['content-type'] })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('文件下载失败')
+  }
+}
+
 function goPage(p: number) {
   if (p < 1 || p > totalPages.value || p === page.current) return
   page.current = p
@@ -465,8 +500,8 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="上传文件" width="150" show-overflow-tooltip>
           <template #default="{ row }">
-            <a v-if="row.has_file && fileName(row.attachment)" class="file-link" href="javascript:;">
-              {{ fileName(row.attachment) }}
+            <a v-if="row.has_file" class="file-link" href="javascript:;" @click="onDownloadFiles(row)">
+              {{ fileName(row.attachment) || '下载文件' }}
             </a>
             <span v-else class="muted">—</span>
           </template>

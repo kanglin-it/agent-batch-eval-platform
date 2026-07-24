@@ -10,25 +10,97 @@ from __future__ import annotations
 
 import asyncio
 import heapq
+import io
+import logging
+import zipfile
 from datetime import date, datetime, time, timezone
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.db.case_session import CaseSessionLocal
+from app.db.case_session import CaseSessionLocal, get_case_db
 from app.schemas.auth import CurrentUser
 from app.schemas.case import CaseFilter, CaseIdsResponse, CaseItem, CasePage
+from app.services.case_data import fetch_case_data
 from app.services.case_source import (
     SourceFilters,
     build_list_source_sql,
     resolve_sources,
 )
+from app.services.oss_file import fetch_file_bytes, normalize_file_ref
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 CASE_SELECTION_LIMIT = 500
+
+
+def _zip_unique(used: set[str], fname: str) -> str:
+    if fname not in used:
+        used.add(fname)
+        return fname
+    stem, dot, ext = fname.rpartition(".")
+    base = stem if dot else fname
+    suffix = f".{ext}" if dot else ""
+    i = 1
+    while f"{base}_{i}{suffix}" in used:
+        i += 1
+    name = f"{base}_{i}{suffix}"
+    used.add(name)
+    return name
+
+
+@router.get("/download-files")
+async def download_case_files(
+    task_id: str = Query(...),
+    db: AsyncSession = Depends(get_case_db),
+    _: CurrentUser = Depends(get_current_user),
+):
+    """Download a case's file(s). Single file → the file; multiple → a zip."""
+    info = (await fetch_case_data(db, [task_id])).get(task_id)
+    file_refs = (info or {}).get("files") or []
+    if not file_refs:
+        raise HTTPException(404, "该用例无可下载文件")
+
+    downloaded: list[tuple[str, bytes, str]] = []
+    for ref in file_refs:
+        norm = normalize_file_ref(ref)
+        if norm is None:
+            continue
+        url, name = norm
+        try:
+            downloaded.append(await fetch_file_bytes(url, name))
+        except Exception:  # noqa: BLE001
+            logger.exception("download case file failed url=%s", url[:120])
+    if not downloaded:
+        raise HTTPException(502, "文件下载失败")
+
+    if len(downloaded) == 1:
+        fname, blob, ctype = downloaded[0]
+        return StreamingResponse(
+            io.BytesIO(blob),
+            media_type=ctype or "application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        used: set[str] = set()
+        for fname, blob, _ctype in downloaded:
+            zf.writestr(_zip_unique(used, fname), blob)
+    buf.seek(0)
+    zipname = quote(f"用例文件_{task_id}.zip")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{zipname}"},
+    )
 
 
 def _source_filters(filters: CaseFilter) -> SourceFilters:
