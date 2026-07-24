@@ -18,8 +18,11 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def run_eval(workflow_id: str, params: dict) -> dict:
-    """Call POST /v1/workflow/run and return the parsed output dict."""
+async def run_eval(workflow_id: str, params: dict) -> tuple[dict, str | None]:
+    """Call POST /v1/workflow/run.
+
+    Returns (output_dict, debug_url) — debug_url is Coze's 执行链接 (view the run).
+    """
     if not settings.coze_api_token:
         raise RuntimeError("未配置 Coze api_token（config.ini [coze] api_token）")
 
@@ -57,9 +60,10 @@ async def run_eval(workflow_id: str, params: dict) -> dict:
             logger.error("[Coze] ✗ 返回无法解析: %r", data[:500])
             raise RuntimeError(f"Coze 返回无法解析: {data!r}")
     data = data or {}
+    debug_url = body.get("debug_url")
     logger.info(
-        "[Coze] ✓ (%sms) score_old=%s score_new=%s file_old=%s file_new=%s",
+        "[Coze] ✓ (%sms) score_old=%s score_new=%s file_old=%s file_new=%s debug_url=%s",
         elapsed, data.get("score_old"), data.get("score_new"),
-        data.get("file_score_old"), data.get("file_score_new"),
+        data.get("file_score_old"), data.get("file_score_new"), debug_url,
     )
-    return data
+    return data, debug_url

@@ -113,6 +113,7 @@ async def _stage_compare(case: EvalTaskCase, workflow_id: str) -> None:
     case.compare_result = result
     case.is_win = result.get("is_win")
     case.hallucination = result.get("hallucination")
+    case.coze_exec_url = result.get("coze_exec_url")
     case.stage = CaseStage.compared
 
 
@@ -236,7 +237,7 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
         "answer_new": case.agent_output or "",
     }
     logger.info("[Compare] case=%s source=%s → 调 Coze workflow=%s", case.id, case.source, workflow_id)
-    out = await run_eval(workflow_id, params)
+    out, exec_url = await run_eval(workflow_id, params)
 
     score_old = out.get("score_old")
     score_new = out.get("score_new")
@@ -245,4 +246,4 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
         and isinstance(score_new, (int, float))
         and score_new > score_old
     )
-    return {**out, "is_win": is_win}
+    return {**out, "is_win": is_win, "coze_exec_url": exec_url}

@@ -29,6 +29,9 @@ async def main() -> None:
             "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS agent_file_result TEXT"
         ))
         await conn.execute(text(
+            "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS coze_exec_url TEXT"
+        ))
+        await conn.execute(text(
             "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS creator_phone VARCHAR(30)"
         ))
         await conn.execute(text(

@@ -107,6 +107,7 @@ class EvalTaskCase(Base):
 
     # Comparison outcome
     compare_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    coze_exec_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Coze 执行链接(debug_url)
     is_win: Mapped[bool | None] = mapped_column(nullable=True)
     hallucination: Mapped[bool | None] = mapped_column(nullable=True)
 
