@@ -98,6 +98,8 @@ class EvalTaskCase(Base):
     # Agent rerun result
     agent_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 新版文件解析结果 (Agent parsed the uploaded files into text) — file_result_new
+    agent_file_result: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Historical baseline = the answer the SaaS system originally returned
     baseline_answer: Mapped[str | None] = mapped_column(Text, nullable=True)

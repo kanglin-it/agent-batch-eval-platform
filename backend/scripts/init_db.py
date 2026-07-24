@@ -25,6 +25,9 @@ async def main() -> None:
         await conn.execute(text(
             "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS source VARCHAR(32)"
         ))
+        await conn.execute(text(
+            "ALTER TABLE eval_task_case ADD COLUMN IF NOT EXISTS agent_file_result TEXT"
+        ))
     print("Created tables:", ", ".join(t.name for t in OWNED_TABLES))
 
 

@@ -96,9 +96,10 @@ async def _run_stage(db, cases, sem, worker) -> None:
 async def _stage_agent(case: EvalTaskCase) -> None:
     if case.stage in (CaseStage.agent_done, CaseStage.compared):
         return
-    output, latency = await _run_agent(case)
+    output, latency, parsed = await _run_agent(case)
     case.agent_output = output
     case.agent_latency_ms = latency
+    case.agent_file_result = parsed
     case.stage = CaseStage.agent_done
     case.error_msg = None
 
@@ -145,23 +146,51 @@ def _contract_review_message(stance_raw) -> str:
     return message
 
 
-async def _run_agent(case: EvalTaskCase) -> tuple[str, int]:
+# When files are attached, ask the Agent to also save the parsed full text as a
+# downloadable txt (parsed_*.txt) — that becomes file_result_new for the eval.
+_PARSE_PROMPT = (
+    "请处理我上传的文件，分两步执行：\n"
+    "1. 把文件的全部内容原样提取成纯文本，用 save_file_for_download 保存为一个 txt 文件"
+    "（文件名以 parsed_ 开头）；\n"
+    "2. 然后完成任务：{task}\n"
+)
+
+
+async def _extract_parsed_text(client, result_files: list) -> str:
+    """Find the parsed_*.txt deliverable and download it as text."""
+    for f in result_files or []:
+        name = f.get("name") or ""
+        if name.startswith("parsed_") and f.get("url"):
+            try:
+                return await client.download_text(f["url"])
+            except Exception:  # noqa: BLE001
+                logger.exception("download parsed text failed url=%s", str(f.get("url"))[:120])
+                return ""
+    return ""
+
+
+async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str]:
     """Rerun a case through the Zhiexa sandbox Agent (create execution task).
 
     For 合同审查 / 文件审查, the user-facing command is a fixed prompt; files are
     downloaded from SaaS OSS (AES-decrypt when needed) and re-uploaded to Agent.
-    Returns (output, latency_ms).
+    When files are present we also ask the Agent to emit a parsed_*.txt (the new file
+    parse result). Returns (output, latency_ms, parsed_text).
     """
     if case.source == "contract_review":
-        message = _contract_review_message(case.stance)
+        task_message = _contract_review_message(case.stance)
     elif case.source in REVIEW_AGENT_PROMPTS:
-        message = REVIEW_AGENT_PROMPTS[case.source]
+        task_message = REVIEW_AGENT_PROMPTS[case.source]
     else:
-        message = case.question or ""
+        task_message = case.question or ""
 
     files = await prepare_agent_files(case.files)
-    result = await get_zhiexa_client().execute(message=message, files=files or None)
-    return result["output"], result["latency_ms"]
+    message = _PARSE_PROMPT.format(task=task_message) if files else task_message
+
+    client = get_zhiexa_client()
+    result = await client.execute(message=message, files=files or None)
+    parsed_text = await _extract_parsed_text(client, result.get("files") or []) if files else ""
+    return result["output"], result["latency_ms"], parsed_text
 
 
 def _compare_query(case: EvalTaskCase) -> str:
@@ -202,7 +231,7 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
     params = {
         "query": _compare_query(case),
         "file_result_old": file_result_old,
-        "file_result_new": "",   # TODO: 新版文件解析结果 (from Agent run)
+        "file_result_new": case.agent_file_result or "",   # Agent 解析出的纯文本
         "answer_old": case.baseline_answer or "",
         "answer_new": case.agent_output or "",
     }

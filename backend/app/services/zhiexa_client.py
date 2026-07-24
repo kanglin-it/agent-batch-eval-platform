@@ -115,6 +115,30 @@ class ZhiexaClient:
         confirm.raise_for_status()
         return file_meta
 
+    # ---------- result artifacts (AI-generated deliverables) ----------
+    async def _result_files(self, client: httpx.AsyncClient, headers: dict, cid: str) -> list[dict]:
+        """Generated files for a conversation (each with a ~1h signed url)."""
+        r = await client.get(
+            f"{settings.zhiexa_skill_base}/api/files",
+            headers=headers, params={"conversation_id": cid},
+        )
+        r.raise_for_status()
+        files = r.json().get("files", [])
+        return [
+            {"name": f.get("name"), "url": f.get("url"), "ext": f.get("ext"),
+             "size": f.get("size_bytes"), "id": f.get("id")}
+            for f in files if f.get("source") == "generated"
+        ]
+
+    async def download_text(self, url: str, encoding: str = "utf-8") -> str:
+        """Download a signed file url as text."""
+        async with httpx.AsyncClient(timeout=max(settings.zhiexa_chat_timeout, 120),
+                                     follow_redirects=True) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            r.encoding = encoding
+            return r.text
+
     # ---------- create execution task = POST /api/chat (SSE) ----------
     async def execute(
         self, message: str, files: list[tuple[str, bytes, str]] | None = None,
@@ -175,8 +199,16 @@ class ZhiexaClient:
                     )
                 raise
 
+            # AI-generated deliverables (e.g. the parsed_*.txt we asked for).
+            result_files: list[dict] = []
+            try:
+                result_files = await self._result_files(client, headers, cid)
+            except Exception:  # noqa: BLE001
+                logger.exception("fetch result files failed cid=%s", cid)
+
         return {"output": "".join(texts), "conversation_id": cid,
-                "latency_ms": int((time.monotonic() - start) * 1000)}
+                "latency_ms": int((time.monotonic() - start) * 1000),
+                "files": result_files}
 
 
 _client: ZhiexaClient | None = None
