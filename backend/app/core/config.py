@@ -31,9 +31,12 @@ def _find_config() -> Path:
 
 class Settings:
     def __init__(self) -> None:
-        # strict=False tolerates duplicate sections/keys (last value wins) so a
-        # copy-paste dup like two [case_database] blocks won't crash startup.
-        cp = configparser.ConfigParser(interpolation=None, strict=False)
+        # strict=False tolerates duplicate sections/keys (last value wins).
+        # inline_comment_prefixes=(";",) strips trailing " ; 注释" from values (e.g. the
+        # "; ← 必填" hints in the config template). NOT "#" — DB passwords contain '#'.
+        cp = configparser.ConfigParser(
+            interpolation=None, strict=False, inline_comment_prefixes=(";",)
+        )
         path = _find_config()
         self.config_path = str(path)
         if path.exists():
