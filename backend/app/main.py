@@ -1,8 +1,17 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import auth, cases, settings as settings_route, tasks
 from app.core.config import settings
+
+# Ensure our INFO app logs (e.g. [Coze] / [Compare]) actually print.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("app").setLevel(logging.INFO)
 
 app = FastAPI(title="Agent 批量评测平台 API", version="0.1.0")
 

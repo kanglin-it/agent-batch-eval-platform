@@ -235,6 +235,7 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
         "answer_old": case.baseline_answer or "",
         "answer_new": case.agent_output or "",
     }
+    logger.info("[Compare] case=%s source=%s → 调 Coze workflow=%s", case.id, case.source, workflow_id)
     out = await run_eval(workflow_id, params)
 
     score_old = out.get("score_old")
