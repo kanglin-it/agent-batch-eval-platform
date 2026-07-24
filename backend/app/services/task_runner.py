@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
-from app.services.oss_file import build_file_result, prepare_agent_files
+from app.services.oss_file import build_file_result, prepare_agent_files, resolve_answer_text
 from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
@@ -223,17 +223,22 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
     """Score old (baseline/workflow) vs new (Agent) via the Coze eval workflow.
 
     old = baseline_answer (SaaS 历史回答), new = agent_output. Win when新版 scores
-    higher. file_result_old/new are the old/new file-parsing outputs — not captured
-    yet, so passed empty for now (TODO). Hallucination is not part of this workflow's
-    output, so it stays unset.
+    higher. Hallucination is not part of this workflow's output, so it stays unset.
+
+    Both old-side inputs are resolved to text here:
+      - file_result_old: download the 待审文件 and extract its text (.docx via stdlib).
+      - answer_old:      QA modules store text; review modules store an OSS link to
+                         the annotated result doc — download and extract that text.
     """
-    # 旧版文件解析结果：直接下载旧任务的文件 OSS 链接并拼成文本。
-    file_result_old = await build_file_result(case.files)
+    file_result_old, answer_old = await asyncio.gather(
+        build_file_result(case.files),
+        resolve_answer_text(case.baseline_answer),
+    )
     params = {
         "query": _compare_query(case),
         "file_result_old": file_result_old,
         "file_result_new": case.agent_file_result or "",   # Agent 解析出的纯文本
-        "answer_old": case.baseline_answer or "",
+        "answer_old": answer_old,
         "answer_new": case.agent_output or "",
     }
     logger.info("[Compare] case=%s source=%s → 调 Coze workflow=%s", case.id, case.source, workflow_id)

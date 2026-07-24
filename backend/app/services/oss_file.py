@@ -9,9 +9,11 @@ Encryption rule (by object suffix only, not by module):
 from __future__ import annotations
 
 import base64
+import io
 import logging
 import mimetypes
 import re
+import zipfile
 from urllib.parse import unquote
 
 import httpx
@@ -124,10 +126,10 @@ _BINARY_MAGIC = (b"PK", b"%PDF", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
 
 
 def _decode_text(data: bytes) -> str:
-    """Best-effort decode of a downloaded parse-result payload to text.
+    """Best-effort decode of a plain-text payload.
 
     If the payload is a binary office/pdf document (not a plain-text parse result),
-    return "" — we don't extract text from binaries here.
+    return "" — callers should route binaries through `extract_text` instead.
     """
     if data.startswith(_BINARY_MAGIC):
         return ""
@@ -137,6 +139,78 @@ def _decode_text(data: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="ignore")
+
+
+def _xml_to_text(xml_bytes: bytes) -> str:
+    """Strip a WordprocessingML part down to visible text (stdlib only)."""
+    xml = xml_bytes.decode("utf-8", errors="ignore")
+    # Preserve structure: paragraph / line break / tab become whitespace.
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<w:tab\b[^>]*/?>", "\t", xml)
+    xml = re.sub(r"<w:br\b[^>]*/?>", "\n", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    text = (
+        text.replace("&lt;", "<").replace("&gt;", ">")
+        .replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+    )
+    return re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", text).strip()
+
+
+def _docx_to_text(data: bytes) -> str:
+    """Extract text from a .docx (zip) payload without any third-party library.
+
+    Pulls the main body (word/document.xml) plus any 批注/comments — review result
+    files carry the 审查意见 as comments, so they must be included.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = set(z.namelist())
+            if "word/document.xml" not in names:
+                return ""
+            parts = [_xml_to_text(z.read("word/document.xml"))]
+            if "word/comments.xml" in names:
+                comments = _xml_to_text(z.read("word/comments.xml"))
+                if comments:
+                    parts.append("【批注】\n" + comments)
+    except Exception:  # noqa: BLE001 — not a valid zip / corrupt docx
+        logger.exception("docx text extraction failed")
+        return ""
+    return "\n".join(p for p in parts if p).strip()
+
+
+def extract_text(fname: str, data: bytes) -> str:
+    """Downloaded file payload → text.
+
+    - .docx (zip/PK)  → unzip and strip WordprocessingML (stdlib only)
+    - plain text       → decode utf-8 / gb18030
+    - .pdf / legacy .doc / other binaries → "" (no extractor bundled)
+    """
+    lower = (fname or "").lower()
+    if data[:2] == b"PK" or lower.endswith(".docx"):
+        text = _docx_to_text(data)
+        if text:
+            return text
+    return _decode_text(data)
+
+
+async def resolve_answer_text(baseline: str | None) -> str:
+    """Resolve a case's 旧版答案 to text.
+
+    QA modules already store the answer as text (returned as-is). Review modules
+    store it as an OSS link to the annotated result doc — download and extract that
+    doc's text so `answer_old` is the actual answer, not a URL.
+    """
+    if not baseline:
+        return ""
+    s = baseline.strip()
+    if not s.startswith(("http://", "https://")):
+        return baseline
+    try:
+        fname, data, _ = await fetch_file_bytes(s)
+        return extract_text(fname, data)
+    except Exception:  # noqa: BLE001
+        logger.exception("resolve answer_old failed url=%s", s[:120])
+        return ""
 
 
 async def build_file_result(file_refs: list | None) -> str:
@@ -154,8 +228,8 @@ async def build_file_result(file_refs: list | None) -> str:
     for idx, (url, name) in enumerate(refs):
         label = "【待审文件】" if idx == 0 else "【参考文件】"
         try:
-            _, data, _ = await fetch_file_bytes(url, name)
-            text = _decode_text(data)
+            fname, data, _ = await fetch_file_bytes(url, name)
+            text = extract_text(fname, data)
         except Exception:
             logger.exception("build_file_result fetch failed url=%s", url[:120])
             text = ""
