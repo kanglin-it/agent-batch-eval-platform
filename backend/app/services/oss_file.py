@@ -120,6 +120,49 @@ async def fetch_file_bytes(url: str, file_name: str = "") -> tuple[str, bytes, s
     return fname, data, _guess_content_type(fname)
 
 
+_BINARY_MAGIC = (b"PK", b"%PDF", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
+
+def _decode_text(data: bytes) -> str:
+    """Best-effort decode of a downloaded parse-result payload to text.
+
+    If the payload is a binary office/pdf document (not a plain-text parse result),
+    return "" — we don't extract text from binaries here.
+    """
+    if data.startswith(_BINARY_MAGIC):
+        return ""
+    for enc in ("utf-8", "gb18030"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+async def build_file_result(file_refs: list | None) -> str:
+    """Download the old task's files from OSS and format as `file_result_*`:
+
+        【待审文件】<name>\n解析内容：<text>\n\n【参考文件】<name>\n解析内容：<text> ...
+
+    The first file is treated as 待审文件 (original), the rest as 参考文件.
+    Returns "" when there are no downloadable file refs.
+    """
+    refs = [r for r in (normalize_file_ref(x) for x in (file_refs or [])) if r]
+    if not refs:
+        return ""
+    blocks: list[str] = []
+    for idx, (url, name) in enumerate(refs):
+        label = "【待审文件】" if idx == 0 else "【参考文件】"
+        try:
+            _, data, _ = await fetch_file_bytes(url, name)
+            text = _decode_text(data)
+        except Exception:
+            logger.exception("build_file_result fetch failed url=%s", url[:120])
+            text = ""
+        blocks.append(f"{label}{name}\n解析内容：{text}")
+    return "\n\n".join(blocks)
+
+
 async def prepare_agent_files(file_refs: list | None) -> list[tuple[str, bytes, str]]:
     """Turn case.files entries into Agent upload tuples."""
     out: list[tuple[str, bytes, str]] = []

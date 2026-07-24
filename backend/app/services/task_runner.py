@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
-from app.services.oss_file import prepare_agent_files
+from app.services.oss_file import build_file_result, prepare_agent_files
 from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
@@ -197,9 +197,11 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
     yet, so passed empty for now (TODO). Hallucination is not part of this workflow's
     output, so it stays unset.
     """
+    # 旧版文件解析结果：直接下载旧任务的文件 OSS 链接并拼成文本。
+    file_result_old = await build_file_result(case.files)
     params = {
         "query": _compare_query(case),
-        "file_result_old": "",   # TODO: 旧版文件解析结果 (from SaaS)
+        "file_result_old": file_result_old,
         "file_result_new": "",   # TODO: 新版文件解析结果 (from Agent run)
         "answer_old": case.baseline_answer or "",
         "answer_new": case.agent_output or "",
