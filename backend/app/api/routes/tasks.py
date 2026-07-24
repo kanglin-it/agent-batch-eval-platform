@@ -127,6 +127,8 @@ async def download_result(
     task = await db.get(EvalTask, task_id)
     if task is None or (not current.is_superuser and task.creator_phone != current.phone):
         raise HTTPException(404, "任务不存在")
+    if task.status not in (TaskStatus.completed, TaskStatus.failed):
+        raise HTTPException(400, "任务执行中，暂不可下载")
     await db.refresh(task, attribute_names=["cases"])
     cases = sorted(task.cases, key=lambda c: c.id)
 

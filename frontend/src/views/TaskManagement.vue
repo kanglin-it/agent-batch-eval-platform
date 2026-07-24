@@ -37,7 +37,13 @@ async function onRetry(row: TaskListItem) {
   load()
 }
 
+// Only finished tasks (completed / failed) can be downloaded; running ones can't.
+function canDownload(row: TaskListItem) {
+  return row.status === 'completed' || row.status === 'failed'
+}
+
 async function onDownload(row: TaskListItem) {
+  if (!canDownload(row)) return
   try {
     const res = await downloadResultExcel(row.id)
     const blob = new Blob([res.data], { type: res.headers['content-type'] })
@@ -112,8 +118,15 @@ onUnmounted(() => {
         <el-table-column prop="creator" label="创建人" width="120" />
         <el-table-column label="操作" width="180" align="center" fixed="right">
           <template #default="{ row }">
-            <el-tooltip content="下载 评测结果Excel" placement="top">
-              <el-button class="btn-download" size="small" @click="onDownload(row)">下载</el-button>
+            <el-tooltip :content="canDownload(row) ? '下载 评测结果Excel' : '任务执行中，暂不可下载'" placement="top">
+              <el-button
+                class="btn-download"
+                size="small"
+                :disabled="!canDownload(row)"
+                @click="onDownload(row)"
+              >
+                下载
+              </el-button>
             </el-tooltip>
             <el-button
               class="btn-retry"
