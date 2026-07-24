@@ -84,12 +84,11 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
-    # User isolation: only the tasks the current user created.
-    result = await db.execute(
-        select(EvalTask)
-        .where(EvalTask.creator_phone == current.phone)
-        .order_by(EvalTask.created_at.desc())
-    )
+    # User isolation: regular users see only their own tasks; superusers see all.
+    stmt = select(EvalTask).order_by(EvalTask.created_at.desc())
+    if not current.is_superuser:
+        stmt = stmt.where(EvalTask.creator_phone == current.phone)
+    result = await db.execute(stmt)
     tasks = result.scalars().unique().all()
     out = []
     for t in tasks:
@@ -106,7 +105,7 @@ async def retry_task(
     current: CurrentUser = Depends(get_current_user),
 ):
     task = await db.get(EvalTask, task_id)
-    if task is None or task.creator_phone != current.phone:
+    if task is None or (not current.is_superuser and task.creator_phone != current.phone):
         raise HTTPException(404, "任务不存在")
     if task.status != TaskStatus.failed:
         raise HTTPException(400, "仅失败状态的任务可重试")
@@ -126,7 +125,7 @@ async def download_result(
 ):
     """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
     task = await db.get(EvalTask, task_id)
-    if task is None or task.creator_phone != current.phone:
+    if task is None or (not current.is_superuser and task.creator_phone != current.phone):
         raise HTTPException(404, "任务不存在")
     await db.refresh(task, attribute_names=["cases"])
     cases = sorted(task.cases, key=lambda c: c.id)
