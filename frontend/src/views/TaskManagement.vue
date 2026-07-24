@@ -26,6 +26,38 @@ async function load() {
   }
 }
 
+// 轮询用：静默刷新，不开 loading 遮罩，原地更新行数据避免整表闪烁/重渲染。
+async function refreshSilently() {
+  let next: TaskListItem[]
+  try {
+    next = await listTasks()
+  } catch {
+    return
+  }
+  patchTasks(next)
+}
+
+function patchTasks(next: TaskListItem[]) {
+  const nextIds = new Set(next.map((t) => t.id))
+  // 1) 原地更新仍存在的行（只改字段，行对象引用不变）
+  for (const cur of tasks.value) {
+    const n = next.find((t) => t.id === cur.id)
+    if (n) Object.assign(cur, n)
+  }
+  // 2) 删除已不存在的行
+  for (let i = tasks.value.length - 1; i >= 0; i--) {
+    if (!nextIds.has(tasks.value[i].id)) tasks.value.splice(i, 1)
+  }
+  // 3) 追加新行
+  const curIds = new Set(tasks.value.map((t) => t.id))
+  for (const n of next) {
+    if (!curIds.has(n.id)) tasks.value.push(n)
+  }
+  // 4) 按后端顺序（created desc）原地排序
+  const order = new Map(next.map((t, i) => [t.id, i]))
+  tasks.value.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+}
+
 function goCreate() {
   ElMessage.info('请先选择评测用例，再创建评测任务')
   router.push({ name: 'cases' })
@@ -87,7 +119,7 @@ onMounted(() => {
   // 进行中的任务自动刷新进度
   timer = setInterval(() => {
     const busy = tasks.value.some((t) => t.status === 'agent_running' || t.status === 'comparing')
-    if (busy) load()
+    if (busy) refreshSilently()
   }, 5000)
 })
 
