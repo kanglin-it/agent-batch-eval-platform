@@ -31,7 +31,9 @@ def _find_config() -> Path:
 
 class Settings:
     def __init__(self) -> None:
-        cp = configparser.ConfigParser(interpolation=None)
+        # strict=False tolerates duplicate sections/keys (last value wins) so a
+        # copy-paste dup like two [case_database] blocks won't crash startup.
+        cp = configparser.ConfigParser(interpolation=None, strict=False)
         path = _find_config()
         self.config_path = str(path)
         if path.exists():
