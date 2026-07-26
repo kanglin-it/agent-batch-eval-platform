@@ -50,6 +50,20 @@ def _doc_ids_has_file(col: str) -> str:
     return f"({col} IS NOT NULL AND btrim({col}) NOT IN ('', '[]', 'null'))"
 
 
+# 文书起草 = 传统文书 ∪ 要素式。
+#   传统文书: module='document_assistant' 且 doc_generation_mode='document_assistant'
+#   要素式:   module='document_draft'     且 doc_generation_mode<>'document_assistant'
+_DOC_DRAFT_MODULE_COND = (
+    "((t.module = 'document_assistant' AND t.doc_generation_mode = 'document_assistant') "
+    "OR (t.module = 'document_draft' AND t.doc_generation_mode <> 'document_assistant'))"
+)
+# 二级功能：在上面的范围内，module='document_draft' 即要素式，其余为传统文书。
+_DOC_DRAFT_SUBFUNC = "CASE WHEN t.module = 'document_draft' THEN '要素式' ELSE '传统文书' END"
+
+# AI类案 / AI搜法 归属"法律检索"功能模块，二级功能即其本身。
+_AI_SUBFUNC = {"case_ai": "AI类案", "law_ai": "AI搜法"}
+
+
 def _score_sql(schema: str, source: str, task_key: str) -> str:
     """Scalar subquery: result_score for task (0差/1好/2未知/NULL无反馈)."""
     apps = ", ".join(f"'{a}'" for a in FEEDBACK_APPS[source])
@@ -174,13 +188,13 @@ def build_list_source_sql(
                p.prompt_content AS question, t.created AS src_created,
                {_score_sql(schema, 'document_draft', 't.task_id')} AS result_score,
                {answer} AS system_answer,
+               {_DOC_DRAFT_SUBFUNC} AS sub_function,
                t.doc_ids AS doc_ids, t.project_id AS project_id,
                {has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
         WHERE t.is_delete = 0
-          AND t.module = 'document_assistant'
-          AND t.doc_generation_mode = 'document_assistant'
+          AND {_DOC_DRAFT_MODULE_COND}
           AND t.parent_task_id = t.task_id
           {status}
           {_and(extra)}
@@ -201,13 +215,15 @@ def build_list_source_sql(
                         FROM {schema}.t_fuxi_task_output o
                        WHERE o.task_id = b.task_id AND o.type = 'analysis')"""
         score = _score_sql(schema, source, "b.task_id")
+        sub_func = _AI_SUBFUNC[source]
         sql = f"""
         SELECT b.kind, b.source, b.task_id, b.question, b.src_created,
                {score} AS result_score, {preview} AS system_answer,
-               b.doc_ids, b.project_id, b.has_file, b.channel_type
+               b.sub_function, b.doc_ids, b.project_id, b.has_file, b.channel_type
         FROM (
             SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
                    h.original_question AS question, h.created_at AS src_created,
+                   '{sub_func}' AS sub_function,
                    h.doc_ids AS doc_ids, h.project_id AS project_id,
                    {has_file} AS has_file, h.channel_type AS channel_type
             FROM {schema}.t_fuxi_history_task h
@@ -317,8 +333,7 @@ def build_capped_count_sql(
             FROM {schema}.t_document_task t
             LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
             WHERE t.is_delete = 0
-              AND t.module = 'document_assistant'
-              AND t.doc_generation_mode = 'document_assistant'
+              AND {_DOC_DRAFT_MODULE_COND}
               AND t.parent_task_id = t.task_id
               {status}
               {_and(extra)}
@@ -452,8 +467,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
         WHERE t.is_delete = 0
-          AND t.module = 'document_assistant'
-          AND t.doc_generation_mode = 'document_assistant'
+          AND {_DOC_DRAFT_MODULE_COND}
           AND t.parent_task_id = t.task_id
           AND t.task_id = ANY(:ids)
         """

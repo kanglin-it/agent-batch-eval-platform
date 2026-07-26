@@ -20,6 +20,13 @@ const SOURCE_LABELS: Record<string, string> = {
   file_review: '文件审查',
 }
 
+// 列表「功能模块」列的展示：AI类案/AI搜法 归为「法律检索」，二级功能再区分（AI类案/AI搜法）。
+const MODULE_LABELS: Record<string, string> = {
+  ...SOURCE_LABELS,
+  case_ai: '法律检索',
+  law_ai: '法律检索',
+}
+
 const EXTRA_FIELD_OPTIONS = [
   { label: '二级功能', value: 'sub_function' },
   { label: 'channel_type', value: 'channel_type' },
@@ -122,6 +129,10 @@ const pageIndeterminate = computed(
 
 function sourceLabel(s?: string) {
   return (s && SOURCE_LABELS[s]) || s || '—'
+}
+
+function moduleLabel(s?: string) {
+  return (s && MODULE_LABELS[s]) || s || '—'
 }
 
 function ratingLabel(r?: string) {
@@ -500,7 +511,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column prop="task_id" label="任务ID" width="160" show-overflow-tooltip />
         <el-table-column label="功能模块" width="110">
-          <template #default="{ row }">{{ sourceLabel(row.function_module) }}</template>
+          <template #default="{ row }">{{ moduleLabel(row.function_module) }}</template>
         </el-table-column>
         <el-table-column label="二级功能" width="110" show-overflow-tooltip>
           <template #default="{ row }">{{ row.sub_function || '—' }}</template>

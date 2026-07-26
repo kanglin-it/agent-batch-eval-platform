@@ -307,6 +307,7 @@ def _to_item(r) -> CaseItem:
         kind=r["kind"],
         task_id=r["task_id"],
         function_module=r["source"],
+        sub_function=r.get("sub_function"),
         question=r.get("question"),
         attachment=attachment,
         has_file=bool(r.get("has_file")),
