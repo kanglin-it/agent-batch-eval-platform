@@ -272,6 +272,10 @@ function removeExtraFilter(idx: number) {
   filters.extra.splice(idx, 1)
 }
 
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
 async function toggleSelectAll() {
   if (allSelected.value) {
     selectedIds.value = new Set()
@@ -486,6 +490,9 @@ onMounted(() => {
           <span>用例列表</span>
           <el-button link type="primary" @click="toggleSelectAll">
             {{ allSelected ? '取消全选' : '全部选中' }}
+          </el-button>
+          <el-button v-if="selectedIds.size" link type="info" @click="clearSelection">
+            清空选择
           </el-button>
           <span v-if="selectedIds.size" class="selected-tip">
             已选中 {{ selectedIds.size }} / {{ SELECTION_LIMIT }} 条
