@@ -29,9 +29,13 @@ const MODULE_LABELS: Record<string, string> = {
 
 const EXTRA_FIELD_OPTIONS = [
   { label: '二级功能', value: 'sub_function' },
-  { label: 'channel_type', value: 'channel_type' },
+  { label: '渠道', value: 'channel_type' },
   { label: '任务ID', value: 'task_id' },
 ]
+
+/** 二级功能可选值（与后端 resolve_sources / document 子条件对齐） */
+const SUB_FUNCTION_OPTIONS = ['传统文书', '要素式', 'AI类案', 'AI搜法']
+const CHANNEL_OPTIONS = ['PC', 'H5', 'APP', 'MINI']
 
 function defaultDateRange(): [string, string] {
   const end = new Date()
@@ -90,11 +94,32 @@ interface CaseItem {
 
 const rows = ref<CaseItem[]>([])
 const total = ref(0)
+const totalCapped = ref(false)
+const totalApprox = ref(false)
+const hasMore = ref(false)
 const page = reactive({ current: 1, size: 10 })
 const selectedIds = ref<Set<string>>(new Set())
 const loading = ref(false)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / page.size)))
+
+const canGoNext = computed(
+  () => hasMore.value || page.current < totalPages.value,
+)
+
+/** 触顶或去重近似时不展示「跳末页」，避免假精确 */
+const canJumpLast = computed(() => !totalCapped.value && !totalApprox.value)
+
+const pagerSummary = computed(() => {
+  const pages = totalPages.value
+  const countLabel = totalCapped.value
+    ? `${total.value}+ 条`
+    : totalApprox.value
+      ? `约 ${total.value} 条`
+      : `${total.value} 条`
+  const pageLabel = totalCapped.value ? `约 ${pages}+ 页` : `共 ${pages} 页`
+  return `第 ${page.current} 页 / ${pageLabel}（${countLabel}）`
+})
 
 const visiblePages = computed(() => {
   const maxVisible = 5
@@ -191,7 +216,9 @@ async function onDownloadFiles(row: CaseItem) {
 }
 
 function goPage(p: number) {
-  if (p < 1 || p > totalPages.value || p === page.current) return
+  if (p < 1 || p === page.current) return
+  // 触顶时 total 是下界，允许在 has_more 为真时继续往后翻（仍受后端 page≤50 限制）
+  if (p > totalPages.value && !hasMore.value) return
   page.current = p
   // 本页勾选不跨页保留，翻页后表头全选与勾选状态清空
   selectedIds.value = new Set()
@@ -207,10 +234,12 @@ function goPrev() {
 }
 
 function goNext() {
+  if (!canGoNext.value) return
   goPage(page.current + 1)
 }
 
 function goLast() {
+  if (!canJumpLast.value) return
   goPage(totalPages.value)
 }
 
@@ -225,8 +254,14 @@ async function search() {
       params: { page: page.current, page_size: page.size },
     })
     rows.value = data.items
-    total.value = data.total
+    total.value = data.total ?? 0
+    totalCapped.value = !!data.total_capped
+    totalApprox.value = !!data.total_approx
+    hasMore.value = !!data.has_more
     if (data.total === 0) ElMessage.info('无相关用例')
+  } catch (e: any) {
+    const msg = e?.response?.data?.detail || e?.message || '查询失败'
+    ElMessage.error(typeof msg === 'string' ? msg : '查询失败')
   } finally {
     loading.value = false
   }
@@ -459,10 +494,36 @@ onMounted(() => {
 
         <el-form-item v-for="(item, idx) in filters.extra" :key="idx" label="额外条件：">
           <div class="extra-row">
-            <el-select v-model="item.field" placeholder="筛选字段" style="width: 160px">
+            <el-select v-model="item.field" placeholder="筛选字段" style="width: 160px" @change="item.value = ''">
               <el-option v-for="opt in EXTRA_FIELD_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
-            <el-input v-model="item.value" placeholder="筛选值" clearable style="width: 280px" />
+            <el-select
+              v-if="item.field === 'sub_function'"
+              v-model="item.value"
+              placeholder="选择二级功能"
+              clearable
+              style="width: 280px"
+            >
+              <el-option v-for="v in SUB_FUNCTION_OPTIONS" :key="v" :label="v" :value="v" />
+            </el-select>
+            <el-select
+              v-else-if="item.field === 'channel_type'"
+              v-model="item.value"
+              placeholder="选择渠道"
+              clearable
+              filterable
+              allow-create
+              style="width: 280px"
+            >
+              <el-option v-for="v in CHANNEL_OPTIONS" :key="v" :label="v" :value="v" />
+            </el-select>
+            <el-input
+              v-else
+              v-model="item.value"
+              :placeholder="item.field === 'task_id' ? '任务 ID' : '筛选值'"
+              clearable
+              style="width: 280px"
+            />
             <el-button link type="danger" @click="removeExtraFilter(idx)">删除</el-button>
           </div>
         </el-form-item>
@@ -537,7 +598,7 @@ onMounted(() => {
         <el-table-column label="创建时间" width="160">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="channel_type" width="120" show-overflow-tooltip>
+        <el-table-column label="渠道" width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.channel_type || '—' }}</template>
         </el-table-column>
       </el-table>
@@ -577,13 +638,14 @@ onMounted(() => {
         <button
           type="button"
           class="pager-btn"
-          :disabled="page.current >= totalPages"
+          :disabled="!canGoNext"
           aria-label="下一页"
           @click="goNext"
         >
           ›
         </button>
         <button
+          v-if="canJumpLast"
           type="button"
           class="pager-btn"
           :disabled="page.current >= totalPages"
@@ -592,7 +654,7 @@ onMounted(() => {
         >
           »
         </button>
-        <span class="pager-summary">第 {{ page.current }} 页 / 共 {{ totalPages }} 页</span>
+        <span class="pager-summary">{{ pagerSummary }}</span>
       </div>
     </div>
 

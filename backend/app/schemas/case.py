@@ -16,6 +16,7 @@ class CaseFilter(BaseModel):
     exclude_failed: bool = True            # 默认只看 FINISH，显著减少扫描量
 
     # Extra dynamic conditions: [{"field": "...", "value": "..."}]
+    # Supported fields: sub_function | channel_type | task_id
     extra: list[dict] = Field(default_factory=list)
 
 
@@ -23,9 +24,9 @@ class CaseItem(BaseModel):
     kind: str                              # qa | review
     task_id: str
     function_module: str | None = None     # 功能模块 (source)
-    sub_function: str | None = None        # 二级功能 (dataset 暂无, 预留)
+    sub_function: str | None = None        # 二级功能
     question: str | None = None            # 用户提问
-    attachment: str | None = None          # 附件文件名 (QA=library解析的文件名 / review=任务名)
+    attachment: str | None = None          # 附件文件名 (QA=library解析的文件名 / review=任务名或文件名)
     has_file: bool = False                 # 是否带文件
     rating: str | None = None              # 好差评: good / bad / none
     result_score: int | None = None        # 原始分: 1好/0差/2未知/None无
@@ -38,6 +39,9 @@ class CaseItem(BaseModel):
 
 class CasePage(BaseModel):
     total: int
+    total_capped: bool = False   # True = 至少一路 count 触顶，total 为下界
+    has_more: bool = False       # 当前页之后是否还有数据（merge 窗口判断）
+    total_approx: bool = False   # True = 开了去重等导致 total 仅为近似
     items: list[CaseItem]
 
 

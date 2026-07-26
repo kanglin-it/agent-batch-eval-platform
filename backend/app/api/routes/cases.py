@@ -1,10 +1,11 @@
 """Case management (用例管理页).
 
 Performance strategy:
-  1. Query each live source in parallel (own DB session)
-  2. Each source only returns LIMIT (offset+page_size) light rows
+  1. Query each live source in parallel (own DB session) — light LIST columns only
+  2. Each source returns LIMIT (offset+page_size) light rows
   3. Merge-sort in Python, then slice the page
-  4. No full-table COUNT — total is inferred from whether more candidates exist
+  4. HYDRATE score / answer / filenames for the page only
+  5. Capped COUNT per source for pager totals (not a fake offset+1)
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import heapq
 import io
 import logging
 import zipfile
+from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from urllib.parse import quote
 
@@ -28,8 +30,12 @@ from app.schemas.auth import CurrentUser
 from app.schemas.case import CaseFilter, CaseIdsResponse, CaseItem, CasePage
 from app.services.case_data import fetch_case_data
 from app.services.case_source import (
+    COUNT_CAP,
     SourceFilters,
+    build_capped_count_sql,
     build_list_source_sql,
+    build_page_hydrate_sql,
+    parse_extra,
     resolve_sources,
 )
 from app.services.library_client import resolve_oss_urls
@@ -40,6 +46,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 CASE_SELECTION_LIMIT = 500
+MAX_PAGE = 50
+MAX_PER_SOURCE = 500
+MAX_PER_SOURCE_DEDUP = 800
 
 
 def _zip_unique(used: set[str], fname: str) -> str:
@@ -105,6 +114,7 @@ async def download_case_files(
 
 
 def _source_filters(filters: CaseFilter) -> SourceFilters:
+    extra = parse_extra(filters.extra)
     return SourceFilters(
         created_start=_parse_day(filters.created_start),
         created_end=_parse_day_end(filters.created_end),
@@ -112,6 +122,9 @@ def _source_filters(filters: CaseFilter) -> SourceFilters:
         has_file=filters.has_file,
         user_rating=filters.user_rating if filters.user_rating in ("good", "bad") else None,
         exclude_failed=bool(filters.exclude_failed),
+        task_id=extra.get("task_id"),
+        channel_type=extra.get("channel_type"),
+        sub_function=extra.get("sub_function"),
     )
 
 
@@ -131,7 +144,6 @@ def _parse_day_end(value: str | None):
     if d is None:
         return None
     return datetime.combine(d, time(23, 59, 59))
-
 
 
 def _created_key(row: dict):
@@ -163,6 +175,19 @@ async def _fetch_source_rows(
     return [dict(r) for r in rows]
 
 
+async def _fetch_source_count(
+    source: str,
+    *,
+    schema: str,
+    sf: SourceFilters,
+    cap: int = COUNT_CAP,
+) -> int:
+    sql, params = build_capped_count_sql(schema, source, filters=sf, cap=cap)
+    async with CaseSessionLocal() as session:
+        row = (await session.execute(text(sql), params)).mappings().first()
+    return int(row["c"]) if row else 0
+
+
 def _merge_desc(groups: list[list[dict]]) -> list[dict]:
     decorated = [sorted(g, key=_created_key, reverse=True) for g in groups if g]
     if not decorated:
@@ -174,7 +199,11 @@ def _dedup_by_question(rows: list[dict]) -> list[dict]:
     seen: set[str] = set()
     out: list[dict] = []
     for r in rows:
-        q = r.get("question") or ""
+        q = (r.get("question") or "").strip()
+        if not q:
+            # Empty questions are not deduped — keep all.
+            out.append(r)
+            continue
         if q in seen:
             continue
         seen.add(q)
@@ -189,39 +218,65 @@ async def list_cases(
     page_size: int = Query(20, ge=1, le=100),
     _: CurrentUser = Depends(get_current_user),
 ):
+    if page > MAX_PAGE:
+        raise HTTPException(
+            400,
+            f"页码不能超过 {MAX_PAGE}，请收窄时间范围或功能类型后再查",
+        )
+
     sf = _source_filters(filters)
     schema = settings.case_schema
-    sources = resolve_sources(filters.function_type or None)
+    sources = resolve_sources(
+        filters.function_type or None,
+        sub_function=sf.sub_function,
+    )
     offset = (page - 1) * page_size
 
     if not sources:
-        return CasePage(total=0, items=[])
+        return CasePage(total=0, total_capped=False, has_more=False, total_approx=False, items=[])
 
     per_source = offset + page_size
     if filters.dedup:
         per_source = max(per_source * 3, 50)
+        per_source = min(per_source, MAX_PER_SOURCE_DEDUP)
+    else:
+        per_source = min(per_source, MAX_PER_SOURCE)
 
-    groups = await asyncio.gather(*[
+    list_coro = [
         _fetch_source_rows(s, schema=schema, sf=sf, per_source_limit=per_source)
         for s in sources
-    ])
+    ]
+    count_coro = [
+        _fetch_source_count(s, schema=schema, sf=sf, cap=COUNT_CAP)
+        for s in sources
+    ]
+    gathered = await asyncio.gather(*(list_coro + count_coro))
+    n = len(sources)
+    groups = list(gathered[:n])
+    counts = list(gathered[n:])
 
-    merged = _merge_desc(list(groups))
+    merged = _merge_desc(groups)
     if filters.dedup:
         merged = _dedup_by_question(merged)
 
     page_rows = merged[offset: offset + page_size]
-    # QA rows only carry doc_ids/project_id — resolve the real file names via the
-    # library so the list shows them instead of a generic 有附件.
-    await _resolve_qa_filenames(page_rows)
     has_more = len(merged) > offset + page_size
-    # Avoid full-table COUNT. Expose a lower-bound total so the pager can advance.
-    if has_more:
-        total = offset + page_size + 1
-    else:
-        total = offset + len(page_rows)
 
-    return CasePage(total=total, items=[_to_item(r) for r in page_rows])
+    await _hydrate_page(page_rows, schema=schema)
+    await _resolve_qa_filenames(page_rows)
+
+    total = sum(counts)
+    total_capped = any(c >= COUNT_CAP for c in counts)
+    # Dedup makes SQL counts an upper-bound approximation.
+    total_approx = bool(filters.dedup)
+
+    return CasePage(
+        total=total,
+        total_capped=total_capped,
+        has_more=has_more,
+        total_approx=total_approx,
+        items=[_to_item(r) for r in page_rows],
+    )
 
 
 @router.post("/ids", response_model=CaseIdsResponse)
@@ -231,13 +286,16 @@ async def list_case_ids(
 ):
     sf = _source_filters(filters)
     schema = settings.case_schema
-    sources = resolve_sources(filters.function_type or None)
+    sources = resolve_sources(
+        filters.function_type or None,
+        sub_function=sf.sub_function,
+    )
     if not sources:
         return CaseIdsResponse(total=0, ids=[], capped=False)
 
     per_source = CASE_SELECTION_LIMIT
     if filters.dedup:
-        per_source = CASE_SELECTION_LIMIT * 2
+        per_source = min(CASE_SELECTION_LIMIT * 2, MAX_PER_SOURCE_DEDUP)
 
     groups = await asyncio.gather(*[
         _fetch_source_rows(s, schema=schema, sf=sf, per_source_limit=per_source)
@@ -254,13 +312,36 @@ async def list_case_ids(
     return CaseIdsResponse(total=len(ids), ids=ids, capped=capped)
 
 
-async def _resolve_qa_filenames(rows: list[dict]) -> None:
-    """Populate QA page rows with real file names via the library (best-effort).
+async def _hydrate_page(rows: list[dict], *, schema: str) -> None:
+    """Fill result_score / system_answer / attachment / has_file for page rows."""
+    if not rows:
+        return
+    by_source: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_source[r["source"]].append(r)
 
-    Each QA row references files by doc_ids/project_id; resolve them so the list
-    shows actual file names instead of a generic 有附件. Bounded by page size and an
-    overall timeout so a slow/unavailable library never blocks the list.
-    """
+    async def one_source(source: str, group: list[dict]) -> None:
+        ids = [r["task_id"] for r in group]
+        sql = build_page_hydrate_sql(schema, source)
+        async with CaseSessionLocal() as session:
+            hydrated = (await session.execute(text(sql), {"ids": ids})).mappings().all()
+        by_id = {h["task_id"]: dict(h) for h in hydrated}
+        for r in group:
+            h = by_id.get(r["task_id"])
+            if not h:
+                continue
+            r["result_score"] = h.get("result_score")
+            r["system_answer"] = h.get("system_answer")
+            if h.get("attachment") is not None:
+                r["attachment"] = h["attachment"]
+            if h.get("has_file") is not None:
+                r["has_file"] = h["has_file"]
+
+    await asyncio.gather(*(one_source(s, g) for s, g in by_source.items()))
+
+
+async def _resolve_qa_filenames(rows: list[dict]) -> None:
+    """Populate QA page rows with real file names via the library (best-effort)."""
     targets = [r for r in rows if r.get("kind") == "qa" and r.get("has_file")]
     if not targets:
         return
@@ -298,7 +379,7 @@ def _score_to_rating(score) -> str:
 def _to_item(r) -> CaseItem:
     answer = r.get("system_answer")
     score = r.get("result_score")
-    # QA: 展示 library 解析出的真实文件名；review: attachment 由 SQL 给出(任务名)。
+    # QA: 展示 library 解析出的真实文件名；review: hydrate 给出文件名或任务名。
     if r.get("kind") == "qa":
         attachment = _qa_attachment_display(r.get("file_names") or [])
     else:
