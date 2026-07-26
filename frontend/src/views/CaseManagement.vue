@@ -111,10 +111,6 @@ const visiblePages = computed(() => {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i)
 })
 
-const allSelected = computed(
-  () => total.value > 0 && selectedIds.value.size >= Math.min(total.value, SELECTION_LIMIT),
-)
-
 const pageSelectedCount = computed(
   () => rows.value.filter((r) => selectedIds.value.has(r.task_id)).length,
 )
@@ -272,12 +268,9 @@ function removeExtraFilter(idx: number) {
   filters.extra.splice(idx, 1)
 }
 
-function clearSelection() {
-  selectedIds.value = new Set()
-}
-
 async function toggleSelectAll() {
-  if (allSelected.value) {
+  // 有任何勾选（含跨页全选残留）时，点一下就整体清空，无需用户再手动清一次。
+  if (selectedIds.value.size > 0) {
     selectedIds.value = new Set()
     return
   }
@@ -489,10 +482,7 @@ onMounted(() => {
         <div class="list-title">
           <span>用例列表</span>
           <el-button link type="primary" @click="toggleSelectAll">
-            {{ allSelected ? '取消全选' : '全部选中' }}
-          </el-button>
-          <el-button v-if="selectedIds.size" link type="info" @click="clearSelection">
-            清空选择
+            {{ selectedIds.size ? '清空已选' : '全部选中' }}
           </el-button>
           <span v-if="selectedIds.size" class="selected-tip">
             已选中 {{ selectedIds.size }} / {{ SELECTION_LIMIT }} 条
