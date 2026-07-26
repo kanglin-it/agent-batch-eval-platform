@@ -105,27 +105,34 @@ const downloadingTaskId = ref<string | null>(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / page.size)))
 
-const canGoNext = computed(
-  () => hasMore.value || page.current < totalPages.value,
+// 只有未触顶、未去重近似时，count 推出的总页数才可信
+const exactTotal = computed(() => !totalCapped.value && !totalApprox.value)
+
+// 近似/触顶时，只承认「当前页 + (hasMore ? 下一页 : 0)」，
+// 不让 count 推出的巨大页数把用户带进空白页
+const reachablePages = computed(() =>
+  exactTotal.value ? totalPages.value : page.current + (hasMore.value ? 1 : 0),
 )
+
+const canGoNext = computed(() => hasMore.value || page.current < reachablePages.value)
 
 /** 触顶或去重近似时不展示「跳末页」，避免假精确 */
 const canJumpLast = computed(() => !totalCapped.value && !totalApprox.value)
 
 const pagerSummary = computed(() => {
-  const pages = totalPages.value
   const countLabel = totalCapped.value
     ? `${total.value}+ 条`
     : totalApprox.value
       ? `约 ${total.value} 条`
       : `${total.value} 条`
-  const pageLabel = totalCapped.value ? `约 ${pages}+ 页` : `共 ${pages} 页`
-  return `第 ${page.current} 页 / ${pageLabel}（${countLabel}）`
+  return exactTotal.value
+    ? `第 ${page.current} 页 / 共 ${totalPages.value} 页（${countLabel}）`
+    : `第 ${page.current} 页（${countLabel}）` // 近似时不报总页数
 })
 
 const visiblePages = computed(() => {
   const maxVisible = 5
-  const tp = totalPages.value
+  const tp = reachablePages.value
   if (tp <= maxVisible) {
     return Array.from({ length: tp }, (_, i) => i + 1)
   }
@@ -223,8 +230,8 @@ async function onDownloadFiles(row: CaseItem) {
 
 function goPage(p: number) {
   if (p < 1 || p === page.current) return
-  // 触顶时 total 是下界，允许在 has_more 为真时继续往后翻（仍受后端 page≤50 限制）
-  if (p > totalPages.value && !hasMore.value) return
+  // 触顶/近似时 total 是下界，只允许翻到「可达页」；has_more 为真时可再往后一页（仍受后端 page≤50 限制）
+  if (p > reachablePages.value && !hasMore.value) return
   page.current = p
   // 本页勾选不跨页保留，翻页后表头全选与勾选状态清空
   selectedIds.value = new Set()
