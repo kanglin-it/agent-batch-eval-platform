@@ -40,6 +40,7 @@ from app.services.case_source import (
 )
 from app.services.library_client import resolve_oss_urls
 from app.services.oss_file import fetch_file_bytes, normalize_file_ref
+from app.utils.text_fix import recover_chinese_text
 
 logger = logging.getLogger(__name__)
 
@@ -377,25 +378,25 @@ def _score_to_rating(score) -> str:
 
 
 def _to_item(r) -> CaseItem:
-    answer = r.get("system_answer")
+    answer = recover_chinese_text(r.get("system_answer"))
     score = r.get("result_score")
     # QA: 展示 library 解析出的真实文件名；review: hydrate 给出文件名或任务名。
     if r.get("kind") == "qa":
         attachment = _qa_attachment_display(r.get("file_names") or [])
     else:
-        attachment = r.get("attachment")
+        attachment = recover_chinese_text(r.get("attachment"))
     return CaseItem(
         kind=r["kind"],
         task_id=r["task_id"],
         function_module=r["source"],
         sub_function=r.get("sub_function"),
-        question=r.get("question"),
+        question=recover_chinese_text(r.get("question")),
         attachment=attachment,
         has_file=bool(r.get("has_file")),
         result_score=score,
         rating=_score_to_rating(score),
         system_answer=answer,
-        is_empty_result=(answer is None or answer == "") if r.get("kind") == "qa" else None,
+        is_empty_result=(answer is None or answer == ""),
         stance=None,
         channel_type=r.get("channel_type"),
         created_at=r["src_created"].isoformat() if r.get("src_created") is not None else None,

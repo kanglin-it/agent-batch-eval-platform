@@ -20,10 +20,24 @@ HEADERS = [
     "是否胜出",
     "评分理由",
     "Coze执行链接",
-    "Agent耗时(ms)",
+    "Agent耗时",
     "状态",
     "错误",
 ]
+
+
+def _format_latency(ms: int | float | None) -> str:
+    """毫秒 → 可读分秒，如 65000 → 1分5秒；不足 1 分则 45秒。"""
+    if ms is None:
+        return ""
+    try:
+        total_sec = max(0, int(round(float(ms) / 1000.0)))
+    except (TypeError, ValueError):
+        return ""
+    minutes, seconds = divmod(total_sec, 60)
+    if minutes:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
 
 
 def _row(task: EvalTask, c: EvalTaskCase) -> list:
@@ -43,7 +57,7 @@ def _row(task: EvalTask, c: EvalTaskCase) -> list:
         "是" if c.is_win else ("否" if c.is_win is not None else ""),
         cr.get("score_reason") or "",
         c.coze_exec_url or "",
-        c.agent_latency_ms,
+        _format_latency(c.agent_latency_ms),
         c.stage.value if c.stage is not None else "",
         c.error_msg or "",
     ]

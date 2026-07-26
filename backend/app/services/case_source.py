@@ -116,6 +116,37 @@ def _review_has_file_sql(schema: str) -> str:
     )"""
 
 
+def _contract_answer_sql(schema: str, task_alias: str = "t", *, max_len: int | None = None) -> str:
+    """合同审查系统回答：对齐 v2/task/result 卡片 title + reason(risk)。"""
+    agg = f"""(
+        SELECT string_agg(
+                 NULLIF(btrim(concat_ws(
+                   E'\\n',
+                   NULLIF(btrim(r.title), ''),
+                   NULLIF(btrim(r.reason), '')
+                 )), ''),
+                 E'\\n\\n'
+                 ORDER BY r.id
+               )
+          FROM {schema}.t_contract_result_info r
+         WHERE r.task_id = {task_alias}.task_id AND r.is_delete = 0
+    )"""
+    if max_len:
+        return f"LEFT({agg}, {int(max_len)})"
+    return agg
+
+
+def _file_review_answer_sql(task_alias: str = "t", *, max_len: int | None = None) -> str:
+    """文件审查系统回答：优先 final_result，否则 review_report。"""
+    expr = f"""NULLIF(btrim(COALESCE(
+        NULLIF(btrim({task_alias}.final_result), ''),
+        {task_alias}.review_report
+    )), '')"""
+    if max_len:
+        return f"LEFT({expr}, {int(max_len)})"
+    return expr
+
+
 def _pushdown_clauses(
     source: str,
     *,
@@ -502,7 +533,7 @@ def build_page_hydrate_sql(
         return f"""
         SELECT t.task_id AS task_id,
                {_score_sql(schema, 'contract_review', 't.task_id')} AS result_score,
-               NULL::text AS system_answer,
+               {_contract_answer_sql(schema, max_len=8000)} AS system_answer,
                COALESCE({att}, t.task_name) AS attachment,
                {_review_has_file_sql(schema)} AS has_file
         FROM {schema}.t_contract_tasks t
@@ -518,7 +549,7 @@ def build_page_hydrate_sql(
         return f"""
         SELECT t.task_id AS task_id,
                {_score_sql(schema, 'file_review', 't.task_id')} AS result_score,
-               NULL::text AS system_answer,
+               {_file_review_answer_sql(max_len=8000)} AS system_answer,
                COALESCE({att}, {qcol}) AS attachment,
                {_review_has_file_sql(schema)} AS has_file
         FROM {schema}.t_file_review_task t
@@ -622,7 +653,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         stance = _contract_stance_sql(schema)
         return f"""
         SELECT 'review' AS kind, 'contract_review' AS source, t.task_id AS task_id,
-               t.task_name AS question, NULL AS system_answer,
+               t.task_name AS question,
+               {_contract_answer_sql(schema)} AS system_answer,
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                {stance} AS stance
@@ -636,7 +668,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
         refs = _review_reffiles_sql(schema)
         return f"""
         SELECT 'review' AS kind, 'file_review' AS source, t.task_id AS task_id,
-               COALESCE(t.origin_name, t.task_name) AS question, NULL AS system_answer,
+               COALESCE(t.origin_name, t.task_name) AS question,
+               {_file_review_answer_sql()} AS system_answer,
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { downloadResultExcel, listTasks, retryTask, type TaskListItem } from '@/api/task'
 
 const router = useRouter()
 const tasks = ref<TaskListItem[]>([])
+const total = ref(0)
 const loading = ref(false)
+const page = reactive({ current: 1, size: 20 })
 let timer: ReturnType<typeof setInterval> | null = null
 
 const STATUS_LABEL: Record<TaskListItem['status'], string> = {
@@ -17,45 +19,88 @@ const STATUS_LABEL: Record<TaskListItem['status'], string> = {
   failed: '失败',
 }
 
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / page.size)))
+
+const visiblePages = computed(() => {
+  const maxVisible = 5
+  const tp = totalPages.value
+  if (tp <= maxVisible) {
+    return Array.from({ length: tp }, (_, i) => i + 1)
+  }
+  let start = Math.max(1, page.current - 2)
+  let end = start + maxVisible - 1
+  if (end > tp) {
+    end = tp
+    start = Math.max(1, end - maxVisible + 1)
+  }
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i)
+})
+
 async function load() {
   loading.value = true
   try {
-    tasks.value = await listTasks()
+    const data = await listTasks(page.current, page.size)
+    tasks.value = data.items
+    total.value = data.total
+    // 删除后当前页可能变空，回退一页
+    if (tasks.value.length === 0 && page.current > 1 && total.value > 0) {
+      page.current = Math.min(page.current, Math.max(1, Math.ceil(total.value / page.size)))
+      await load()
+    }
   } finally {
     loading.value = false
   }
 }
 
-// 轮询用：静默刷新，不开 loading 遮罩，原地更新行数据避免整表闪烁/重渲染。
+// 轮询用：静默刷新当前页，不开 loading 遮罩，原地更新行数据避免整表闪烁。
 async function refreshSilently() {
-  let next: TaskListItem[]
+  let data
   try {
-    next = await listTasks()
+    data = await listTasks(page.current, page.size)
   } catch {
     return
   }
-  patchTasks(next)
+  total.value = data.total
+  patchTasks(data.items)
 }
 
 function patchTasks(next: TaskListItem[]) {
   const nextIds = new Set(next.map((t) => t.id))
-  // 1) 原地更新仍存在的行（只改字段，行对象引用不变）
   for (const cur of tasks.value) {
     const n = next.find((t) => t.id === cur.id)
     if (n) Object.assign(cur, n)
   }
-  // 2) 删除已不存在的行
   for (let i = tasks.value.length - 1; i >= 0; i--) {
     if (!nextIds.has(tasks.value[i].id)) tasks.value.splice(i, 1)
   }
-  // 3) 追加新行
   const curIds = new Set(tasks.value.map((t) => t.id))
   for (const n of next) {
     if (!curIds.has(n.id)) tasks.value.push(n)
   }
-  // 4) 按后端顺序（created desc）原地排序
   const order = new Map(next.map((t, i) => [t.id, i]))
   tasks.value.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+}
+
+function goPage(p: number) {
+  if (p < 1 || p > totalPages.value || p === page.current) return
+  page.current = p
+  load()
+}
+
+function goFirst() {
+  goPage(1)
+}
+
+function goPrev() {
+  goPage(page.current - 1)
+}
+
+function goNext() {
+  goPage(page.current + 1)
+}
+
+function goLast() {
+  goPage(totalPages.value)
 }
 
 function goCreate() {
@@ -116,7 +161,7 @@ function statusClass(status: TaskListItem['status']) {
 
 onMounted(() => {
   load()
-  // 进行中的任务自动刷新进度
+  // 进行中的任务自动刷新进度（只刷当前页）
   timer = setInterval(() => {
     const busy = tasks.value.some((t) => t.status === 'agent_running' || t.status === 'comparing')
     if (busy) refreshSilently()
@@ -171,6 +216,59 @@ onUnmounted(() => {
           </template>
         </el-table-column>
       </el-table>
+
+      <div class="pager">
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current <= 1"
+          aria-label="首页"
+          @click="goFirst"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current <= 1"
+          aria-label="上一页"
+          @click="goPrev"
+        >
+          ‹
+        </button>
+
+        <template v-for="p in visiblePages" :key="p">
+          <button
+            v-if="p === page.current"
+            type="button"
+            class="pager-btn pager-btn--active"
+            @click="goPage(p)"
+          >
+            {{ p }}
+          </button>
+          <button v-else type="button" class="pager-num" @click="goPage(p)">{{ p }}</button>
+        </template>
+
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current >= totalPages"
+          aria-label="下一页"
+          @click="goNext"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="page.current >= totalPages"
+          aria-label="末页"
+          @click="goLast"
+        >
+          »
+        </button>
+        <span class="pager-summary">第 {{ page.current }} 页 / 共 {{ totalPages }} 页（{{ total }} 条）</span>
+      </div>
     </div>
   </div>
 </template>
@@ -262,5 +360,50 @@ onUnmounted(() => {
   border-color: #ffccc7;
   color: #fff;
   opacity: 1;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.pager-btn,
+.pager-num {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fff;
+  color: #606266;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.pager-btn:disabled {
+  color: #c0c4cc;
+  cursor: not-allowed;
+  background: #f5f7fa;
+}
+
+.pager-btn--active,
+.pager-num:hover {
+  color: #409eff;
+  border-color: #409eff;
+}
+
+.pager-btn--active {
+  background: #ecf5ff;
+  font-weight: 600;
+}
+
+.pager-summary {
+  margin-left: 8px;
+  font-size: 13px;
+  color: #909399;
 }
 </style>

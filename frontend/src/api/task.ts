@@ -14,6 +14,11 @@ export interface TaskListItem {
   created_at: string
 }
 
+export interface TaskPage {
+  total: number
+  items: TaskListItem[]
+}
+
 export interface CreateTaskPayload {
   name: string
   eval_workflow_id: string
@@ -22,8 +27,10 @@ export interface CreateTaskPayload {
   creator?: string
 }
 
-export function listTasks() {
-  return http.get<TaskListItem[]>('/api/eval-tasks').then((r) => r.data)
+export function listTasks(page = 1, pageSize = 20) {
+  return http
+    .get<TaskPage>('/api/eval-tasks', { params: { page, page_size: pageSize } })
+    .then((r) => r.data)
 }
 
 export function listWorkflowIds() {

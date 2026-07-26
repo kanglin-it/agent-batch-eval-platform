@@ -194,11 +194,11 @@ def extract_text(fname: str, data: bytes) -> str:
 
 
 async def resolve_answer_text(baseline: str | None) -> str:
-    """Resolve a case's 旧版答案 to text.
+    """Resolve a case's 旧版答案 to text for Coze `answer_old`.
 
-    QA modules already store the answer as text (returned as-is). Review modules
-    store it as an OSS link to the annotated result doc — download and extract that
-    doc's text so `answer_old` is the actual answer, not a URL.
+    Most modules (含合同/文件审查) now store baseline as plain text
+    (卡片摘要 / final_result 等). Legacy rows may still hold an OSS URL to the
+    annotated result doc — download and extract text in that case.
     """
     if not baseline:
         return ""

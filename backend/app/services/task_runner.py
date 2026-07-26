@@ -194,15 +194,27 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str]:
     return result["output"], result["latency_ms"], parsed_text
 
 
+def _parse_stance(stance_raw) -> dict | None:
+    if isinstance(stance_raw, dict):
+        return stance_raw
+    if isinstance(stance_raw, str) and stance_raw.strip():
+        try:
+            parsed = json.loads(stance_raw)
+        except (TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def _compare_query(case: EvalTaskCase) -> str:
-    """query for the eval workflow: 合同审查 uses the 持方页 info, else the question."""
+    """query for the eval workflow.
+
+    - 合同审查: 持方页（立场 / 力度 / 要求）
+    - 文件审查: 任务名/文件名 + custom_require
+    - 其它: question
+    """
     if case.source == "contract_review":
-        stance = case.stance
-        if isinstance(stance, str):
-            try:
-                stance = json.loads(stance)
-            except (TypeError, ValueError):
-                stance = None
+        stance = _parse_stance(case.stance)
         if isinstance(stance, dict):
             parts = []
             if stance.get("review_stance") or stance.get("subject"):
@@ -216,6 +228,20 @@ def _compare_query(case: EvalTaskCase) -> str:
                 return joined
         if isinstance(case.stance, str) and case.stance:
             return case.stance
+        return case.question or ""
+
+    if case.source == "file_review":
+        stance = _parse_stance(case.stance)
+        custom = ""
+        if isinstance(stance, dict) and stance.get("custom_require"):
+            custom = str(stance["custom_require"]).strip()
+        name = (case.question or "").strip()
+        if name and custom:
+            return f"{name}。审查要求：{custom}"
+        if custom:
+            return f"审查要求：{custom}"
+        return name
+
     return case.question or ""
 
 
@@ -227,8 +253,8 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
 
     Both old-side inputs are resolved to text here:
       - file_result_old: download the 待审文件 and extract its text (.docx via stdlib).
-      - answer_old:      QA modules store text; review modules store an OSS link to
-                         the annotated result doc — download and extract that text.
+      - answer_old:      baseline text (QA 历史回答；合同=结果卡片摘要；
+                         文件审查=final_result)。若仍是历史 OSS URL 则下载抽文本。
     """
     file_result_old, answer_old = await asyncio.gather(
         build_file_result(case.files),

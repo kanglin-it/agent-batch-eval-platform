@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search } from '@element-plus/icons-vue'
+import { Loading, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -59,7 +59,7 @@ const filters = reactive({
   has_file: null as boolean | null,
   user_rating: '',
   keyword: '',
-  dedup: false,
+  dedup: true,
   exclude_failed: true,
   extra: [] as { field: string; value: string }[],
 })
@@ -97,9 +97,11 @@ const total = ref(0)
 const totalCapped = ref(false)
 const totalApprox = ref(false)
 const hasMore = ref(false)
-const page = reactive({ current: 1, size: 10 })
+const page = reactive({ current: 1, size: 20 })
 const selectedIds = ref<Set<string>>(new Set())
 const loading = ref(false)
+/** 正在下载文件的 task_id；用于「上传文件」列 loading 反馈 */
+const downloadingTaskId = ref<string | null>(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / page.size)))
 
@@ -195,6 +197,8 @@ function parseFilename(cd?: string): string {
 }
 
 async function onDownloadFiles(row: CaseItem) {
+  if (!row.task_id || downloadingTaskId.value === row.task_id) return
+  downloadingTaskId.value = row.task_id
   try {
     const res = await http.get('/api/cases/download-files', {
       params: { task_id: row.task_id },
@@ -212,6 +216,8 @@ async function onDownloadFiles(row: CaseItem) {
     URL.revokeObjectURL(url)
   } catch {
     ElMessage.error('文件下载失败')
+  } finally {
+    downloadingTaskId.value = null
   }
 }
 
@@ -286,7 +292,7 @@ function reset() {
     has_file: null,
     user_rating: '',
     keyword: '',
-    dedup: false,
+    dedup: true,
     exclude_failed: true,
     extra: [],
   })
@@ -581,9 +587,18 @@ onMounted(() => {
             <span v-else class="muted">无</span>
           </template>
         </el-table-column>
-        <el-table-column label="上传文件" width="150" show-overflow-tooltip>
+        <el-table-column label="上传文件" width="160" show-overflow-tooltip>
           <template #default="{ row }">
-            <a v-if="row.has_file" class="file-link" href="javascript:;" @click="onDownloadFiles(row)">
+            <span v-if="row.has_file && downloadingTaskId === row.task_id" class="file-downloading">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              下载中…
+            </span>
+            <a
+              v-else-if="row.has_file"
+              class="file-link"
+              href="javascript:;"
+              @click="onDownloadFiles(row)"
+            >
               {{ fileName(row.attachment) || '下载文件' }}
             </a>
             <span v-else class="muted">—</span>
@@ -813,6 +828,15 @@ onMounted(() => {
 
 .file-link:hover {
   text-decoration: underline;
+}
+
+.file-downloading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #909399;
+  font-size: 13px;
+  cursor: wait;
 }
 
 .muted {

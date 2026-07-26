@@ -1,7 +1,7 @@
 import io
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,7 @@ from app.db.case_session import get_case_db
 from app.db.session import get_db
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.schemas.auth import CurrentUser
-from app.schemas.task import CreateTaskRequest, TaskListItem
+from app.schemas.task import CreateTaskRequest, TaskListItem, TaskPage
 from app.services.case_data import fetch_case_data
 from app.services.export_excel import build_result_xlsx
 from app.services.task_runner import run_task
@@ -79,22 +79,36 @@ async def create_task(
     return TaskListItem(progress=_progress(task), **_task_fields(task))
 
 
-@router.get("", response_model=list[TaskListItem])
+@router.get("", response_model=TaskPage)
 async def list_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
     # User isolation: regular users see only their own tasks; superusers see all.
-    stmt = select(EvalTask).order_by(EvalTask.created_at.desc())
+    filters = []
     if not current.is_superuser:
-        stmt = stmt.where(EvalTask.creator_phone == current.phone)
-    result = await db.execute(stmt)
-    tasks = result.scalars().unique().all()
+        filters.append(EvalTask.creator_phone == current.phone)
+
+    count_stmt = select(func.count()).select_from(EvalTask)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = int((await db.execute(count_stmt)).scalar_one() or 0)
+
+    stmt = (
+        select(EvalTask)
+        .where(*filters)
+        .order_by(EvalTask.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    tasks = (await db.execute(stmt)).scalars().unique().all()
     out = []
     for t in tasks:
         await db.refresh(t, attribute_names=["cases"])
         out.append(TaskListItem(progress=_progress(t), **_task_fields(t)))
-    return out
+    return TaskPage(total=total, items=out)
 
 
 @router.post("/{task_id}/retry", response_model=TaskListItem)

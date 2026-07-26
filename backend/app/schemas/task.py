@@ -29,3 +29,8 @@ class TaskListItem(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TaskPage(BaseModel):
+    total: int
+    items: list[TaskListItem]

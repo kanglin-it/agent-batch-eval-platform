@@ -12,7 +12,7 @@ class CaseFilter(BaseModel):
     keyword: str | None = None             # 用户提问关键词
 
     # 数据处理
-    dedup: bool = False                    # 自动去重（同用户问题）
+    dedup: bool = True                     # 自动去重（同用户问题）
     exclude_failed: bool = True            # 默认只看 FINISH，显著减少扫描量
 
     # Extra dynamic conditions: [{"field": "...", "value": "..."}]
@@ -30,7 +30,7 @@ class CaseItem(BaseModel):
     has_file: bool = False                 # 是否带文件
     rating: str | None = None              # 好差评: good / bad / none
     result_score: int | None = None        # 原始分: 1好/0差/2未知/None无
-    system_answer: str | None = None       # 系统回答（历史基线, QA 才有）
+    system_answer: str | None = None       # 系统回答（QA=历史答案；合同=结果卡片摘要；文件审查=报告/final_result）
     is_empty_result: bool | None = None    # 结果是否为空
     stance: dict | None = None             # 审查立场/持方页 (review 才有)
     channel_type: str | None = None        # 渠道: PC / H5 / APP / MINI 等
