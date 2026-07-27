@@ -77,7 +77,7 @@ async def create_task(
         case_count=len(case_ids),
         status=TaskStatus.agent_running,
         creator=(body.creator or current.username).strip() or current.username,
-        creator_phone=current.phone,          # owner key for isolation
+        creator_phone=current.phone,          # recorded for reference (no isolation)
         filter_snapshot=body.filter_snapshot,
     )
     task.cases = [
@@ -110,19 +110,13 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
-    # User isolation: regular users see only their own tasks; superusers see all.
-    filters = []
-    if not current.is_superuser:
-        filters.append(EvalTask.creator_phone == current.phone)
-
-    count_stmt = select(func.count()).select_from(EvalTask)
-    if filters:
-        count_stmt = count_stmt.where(*filters)
-    total = int((await db.execute(count_stmt)).scalar_one() or 0)
+    # No isolation: every logged-in user sees all tasks.
+    total = int(
+        (await db.execute(select(func.count()).select_from(EvalTask))).scalar_one() or 0
+    )
 
     stmt = (
         select(EvalTask)
-        .where(*filters)
         .order_by(EvalTask.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -143,7 +137,7 @@ async def retry_task(
     current: CurrentUser = Depends(get_current_user),
 ):
     task = await db.get(EvalTask, task_id)
-    if task is None or (not current.is_superuser and task.creator_phone != current.phone):
+    if task is None:
         raise HTTPException(404, "任务不存在")
     await db.refresh(task, attribute_names=["cases"])
     if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
@@ -187,7 +181,7 @@ async def download_result(
 ):
     """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
     task = await db.get(EvalTask, task_id)
-    if task is None or (not current.is_superuser and task.creator_phone != current.phone):
+    if task is None:
         raise HTTPException(404, "任务不存在")
     if task.status not in (TaskStatus.completed, TaskStatus.failed):
         raise HTTPException(400, "任务执行中，暂不可下载")
