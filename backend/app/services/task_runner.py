@@ -11,7 +11,6 @@ the external calls (`_run_agent`, `_compare`) are stubs to wire up once the Agen
 and Coze contracts + metric definitions are confirmed.
 """
 import asyncio
-import functools
 import json
 import logging
 
@@ -56,8 +55,8 @@ async def run_task(task_id: int) -> None:
 
         sem = asyncio.Semaphore(CONCURRENCY)
 
-        # ---- Stage 1: Agent 执行 ----
         task.status = TaskStatus.agent_running
+        workflow_id = task.eval_workflow_id
         await db.commit()
         # Warm JWT once before fan-out so concurrent cases don't race on auth.
         try:
@@ -71,14 +70,24 @@ async def run_task(task_id: int) -> None:
             task.status = TaskStatus.failed
             await db.commit()
             return
-        await _run_stage(db, cases, sem, _stage_agent)
 
-        # ---- Stage 2: 对比评测 ----
-        task.status = TaskStatus.comparing
-        await db.commit()
-        await _run_stage(db, cases, sem, functools.partial(_stage_compare, workflow_id=task.eval_workflow_id))
+        # Detach the case objects from the shared session BEFORE running the
+        # pipeline: each case is persisted through its own session (targeted
+        # UPDATE), and the pipeline frees each case's large text fields as soon as
+        # they're safely in the DB. If the shared session still tracked them, the
+        # final commit would flush those freed (None) fields back and wipe the
+        # results. Only small result scalars are read afterwards for aggregation.
+        for c in cases:
+            db.expunge(c)
 
-        # ---- Aggregate ----
+        # Per-case pipeline: run Agent then Coze-compare for one case, then release
+        # its heavy text before the next case starts. Peak memory is thus bounded
+        # to ~CONCURRENCY cases' worth of text — NOT all cases at once, which was
+        # the real OOM driver (the old two-stage design held every case's full
+        # parsed text + agent output in memory simultaneously).
+        await asyncio.gather(*(_pipeline(c, sem, workflow_id) for c in cases))
+
+        # ---- Aggregate (small scalars only; heavy text already freed) ----
         done = [c for c in cases if c.stage == CaseStage.compared]
         failed = [c for c in cases if c.stage == CaseStage.failed]
         if done:
@@ -88,6 +97,34 @@ async def run_task(task_id: int) -> None:
             task.avg_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else None
         task.status = TaskStatus.failed if failed and not done else TaskStatus.completed
         await db.commit()
+
+
+async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str) -> None:
+    """Agent → 对比 for a single case, then free its large text fields.
+
+    Both stages run under one `sem` slot so at most CONCURRENCY cases hold heavy
+    text (parsed file text / agent output / baseline) at a time. Stage idempotency
+    (skip agent_done/compared) keeps retries correct."""
+    async with sem:
+        try:
+            await _stage_agent(case)            # sets agent_output/file_result/…
+            if case.stage == CaseStage.agent_done:
+                await _persist_case(case)
+                await _stage_compare(case, workflow_id=workflow_id)
+                await _persist_case(case)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("case %s failed", case.id)
+            case.stage = CaseStage.failed
+            case.error_msg = str(exc) or type(exc).__name__
+            await _persist_case(case)
+        finally:
+            # Results are in the DB now; drop the large text so it doesn't pile up
+            # across cases. Scalars used by aggregation (stage/is_win/…) are kept.
+            case.agent_output = None
+            case.agent_file_result = None
+            case.baseline_answer = None
+            case.compare_result = None
+            case.files = None
 
 
 async def _persist_case(case: EvalTaskCase) -> None:
@@ -121,24 +158,6 @@ async def _persist_case(case: EvalTaskCase) -> None:
             await s.commit()
     except Exception:  # noqa: BLE001 — progress persistence must never kill the run
         logger.exception("persist case %s progress failed", case.id)
-
-
-async def _run_stage(db, cases, sem, worker) -> None:
-    async def guarded(case):
-        # Idempotency: skip cases already past this stage (supports retry).
-        async with sem:
-            try:
-                await worker(case)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("case %s failed", case.id)
-                case.stage = CaseStage.failed
-                case.error_msg = str(exc) or type(exc).__name__
-            # Commit THIS case right away so the task list advances one-by-one
-            # instead of only when the whole stage finishes.
-            await _persist_case(case)
-
-    await asyncio.gather(*(guarded(c) for c in cases))
-    await db.commit()
 
 
 async def _stage_agent(case: EvalTaskCase) -> None:
