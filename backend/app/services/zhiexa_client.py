@@ -191,6 +191,11 @@ class ZhiexaClient:
             uploaded: list[dict] = []
             for filename, data, ctype in files or []:
                 uploaded.append(await self._upload_file(client, headers, cid, filename, data, ctype))
+            # Files are now on OSS; drop the (potentially large) input bytes before
+            # the minutes-long SSE so they don't sit in pod memory. Clearing the list
+            # frees them from the caller too (same object) — caller uses `had_files`.
+            if files:
+                files.clear()
 
             texts: list[str] = []
             try:

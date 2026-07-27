@@ -269,14 +269,17 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str
         task_message = case.question or ""
 
     files = await prepare_agent_files(case.files)
-    message = _PARSE_PROMPT.format(task=task_message) if files else task_message
+    had_files = bool(files)
+    message = _PARSE_PROMPT.format(task=task_message) if had_files else task_message
 
     client = get_zhiexa_client()
     # Global cap (across all tasks AND workers) on concurrent Agent /api/chat runs.
+    # execute() frees the uploaded input bytes after upload, so `files` may be empty
+    # afterwards — gate the parse extraction on had_files, not files.
     async with agent_slot():
         result = await client.execute(message=message, files=files or None)
     result_files = result.get("files") or []
-    parsed_text = await _extract_parsed_text(client, result_files) if files else ""
+    parsed_text = await _extract_parsed_text(client, result_files) if had_files else ""
     # The answer may live in a generated file (not just the SSE text) — fold it in
     # so answer_new / the Excel 新版答案 include it.
     output_files_text = await _extract_output_files(client, result_files)
