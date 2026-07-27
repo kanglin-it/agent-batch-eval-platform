@@ -30,9 +30,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.case import CaseFilter, CaseIdsResponse, CaseItem, CasePage
 from app.services.case_data import fetch_case_data
 from app.services.case_source import (
-    COUNT_CAP,
     SourceFilters,
-    build_capped_count_sql,
     build_list_source_sql,
     build_page_hydrate_sql,
     parse_extra,
@@ -176,19 +174,6 @@ async def _fetch_source_rows(
     return [dict(r) for r in rows]
 
 
-async def _fetch_source_count(
-    source: str,
-    *,
-    schema: str,
-    sf: SourceFilters,
-    cap: int = COUNT_CAP,
-) -> int:
-    sql, params = build_capped_count_sql(schema, source, filters=sf, cap=cap)
-    async with CaseSessionLocal() as session:
-        row = (await session.execute(text(sql), params)).mappings().first()
-    return int(row["c"]) if row else 0
-
-
 def _merge_desc(groups: list[list[dict]]) -> list[dict]:
     decorated = [sorted(g, key=_created_key, reverse=True) for g in groups if g]
     if not decorated:
@@ -243,20 +228,15 @@ async def list_cases(
     else:
         per_source = min(per_source, MAX_PER_SOURCE)
 
-    list_coro = [
+    # No precise COUNT (6 capped counts scanning live tables were the main cost).
+    # Fetch only the list rows; the pager navigates by has_more (prev/next), and the
+    # total is reported as a lower bound ("N+ 条") that firms up on the last page.
+    groups = await asyncio.gather(*[
         _fetch_source_rows(s, schema=schema, sf=sf, per_source_limit=per_source)
         for s in sources
-    ]
-    count_coro = [
-        _fetch_source_count(s, schema=schema, sf=sf, cap=COUNT_CAP)
-        for s in sources
-    ]
-    gathered = await asyncio.gather(*(list_coro + count_coro))
-    n = len(sources)
-    groups = list(gathered[:n])
-    counts = list(gathered[n:])
+    ])
 
-    merged = _merge_desc(groups)
+    merged = _merge_desc(list(groups))
     if filters.dedup:
         merged = _dedup_by_question(merged)
 
@@ -266,16 +246,14 @@ async def list_cases(
     await _hydrate_page(page_rows, schema=schema)
     await _resolve_qa_filenames(page_rows)
 
-    total = sum(counts)
-    total_capped = any(c >= COUNT_CAP for c in counts)
-    # Dedup makes SQL counts an upper-bound approximation.
-    total_approx = bool(filters.dedup)
-
+    # total = rows seen up to this page (lower bound). When has_more, it's capped
+    # ("N+ 条") and the pager stays in has_more mode; on the last page it's exact.
+    total = offset + len(page_rows)
     return CasePage(
         total=total,
-        total_capped=total_capped,
+        total_capped=has_more,
         has_more=has_more,
-        total_approx=total_approx,
+        total_approx=bool(filters.dedup),
         items=[_to_item(r) for r in page_rows],
     )
 

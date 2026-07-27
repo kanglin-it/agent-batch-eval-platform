@@ -1,13 +1,17 @@
+import asyncio
+import datetime as dt
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.api.routes import auth, cases, settings as settings_route, tasks
 from app.core.config import settings
+from app.db.case_session import CaseSessionLocal
 from app.db.session import SessionLocal
 from app.models.eval_task import EvalTask, TaskStatus
+from app.services.case_source import SOURCE_ORDER, SourceFilters, build_list_source_sql
 
 # Ensure our INFO app logs (e.g. [Coze] / [Compare]) actually print.
 logging.basicConfig(
@@ -54,6 +58,33 @@ async def _reconcile_orphaned_tasks() -> None:
             logging.getLogger("app").warning(
                 "reconciled %d interrupted task(s) -> failed", len(orphans)
             )
+
+
+async def _warm_up_case_sources() -> None:
+    """Pre-open the read pool and warm PG/OS cache for the default 15-day window,
+    so the user's *first* case-list query is already hot (it's otherwise several×
+    slower cold). Best-effort and non-blocking: failures are logged, not fatal."""
+    log = logging.getLogger("app")
+    sf = SourceFilters(created_start=dt.date.today() - dt.timedelta(days=15))
+    schema = settings.case_schema
+
+    async def one(source: str) -> None:
+        try:
+            sql, params = build_list_source_sql(schema, source, filters=sf, per_source_limit=20)
+            async with CaseSessionLocal() as session:
+                await session.execute(text(sql), params)
+        except Exception:  # noqa: BLE001 — warm-up must never break startup
+            log.exception("warm-up query failed for source=%s", source)
+
+    start = asyncio.get_event_loop().time()
+    await asyncio.gather(*(one(s) for s in SOURCE_ORDER))
+    log.info("case-source warm-up done (%.0fms)", (asyncio.get_event_loop().time() - start) * 1000)
+
+
+@app.on_event("startup")
+async def _warm_up_on_startup() -> None:
+    # Run in the background so server readiness isn't delayed by the DB warm-up.
+    asyncio.create_task(_warm_up_case_sources())
 
 
 @app.get("/health", tags=["meta"])
