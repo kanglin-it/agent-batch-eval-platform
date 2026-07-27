@@ -40,7 +40,8 @@ const CHANNEL_OPTIONS = ['PC', 'H5', 'APP', 'MINI']
 function defaultDateRange(): [string, string] {
   const end = new Date()
   const start = new Date()
-  start.setDate(end.getDate() - 30)
+  // 默认近半个月：计数/合并的数据量更小，列表打开更快（用户仍可自行扩大范围）
+  start.setDate(end.getDate() - 15)
   const fmt = (d: Date) => {
     const y = d.getFullYear()
     const m = String(d.getMonth() + 1).padStart(2, '0')
