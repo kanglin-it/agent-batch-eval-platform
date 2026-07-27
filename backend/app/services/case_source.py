@@ -95,6 +95,10 @@ _DOC_DRAFT_QUESTION = (
 
 _AI_SUBFUNC = {"case_ai": "AI类案", "law_ai": "AI搜法"}
 
+# 只看主任务、过滤子任务：task_id == parent_task_id（无父也算主任务）。
+# 子任务 = parent_task_id 指向别的主任务 id。合同/文件审查用。
+_MAIN_TASK_ONLY = "(t.parent_task_id IS NULL OR t.parent_task_id = t.task_id)"
+
 
 def _score_sql(schema: str, source: str, task_key: str) -> str:
     apps = ", ".join(f"'{a}'" for a in FEEDBACK_APPS[source])
@@ -340,6 +344,7 @@ def build_list_source_sql(
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
+          AND {_MAIN_TASK_ONLY}
           {status}
           {_and(extra)}
         ORDER BY t.created DESC
@@ -365,6 +370,7 @@ def build_list_source_sql(
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0
+          AND {_MAIN_TASK_ONLY}
           {status}
           {_and(extra)}
         ORDER BY t.created DESC
@@ -460,6 +466,7 @@ def build_capped_count_sql(
         SELECT count(*)::bigint AS c FROM (
             SELECT 1 FROM {schema}.t_contract_tasks t
             WHERE t.is_delete = 0
+              AND {_MAIN_TASK_ONLY}
               {status}
               {_and(extra)}
             LIMIT {lim}
@@ -480,6 +487,7 @@ def build_capped_count_sql(
         SELECT count(*)::bigint AS c FROM (
             SELECT 1 FROM {schema}.t_file_review_task t
             WHERE t.is_delete = 0
+              AND {_MAIN_TASK_ONLY}
               {status}
               {_and(extra)}
             LIMIT {lim}
@@ -666,7 +674,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                {stance} AS stance
         FROM {schema}.t_contract_tasks t
-        WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)
+        WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
         """
 
     if source == "file_review":
@@ -681,7 +689,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance
         FROM {schema}.t_file_review_task t
-        WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)
+        WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
         """
 
     raise ValueError(f"unknown source: {source}")
