@@ -15,7 +15,7 @@ import functools
 import json
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
@@ -78,6 +78,37 @@ async def run_task(task_id: int) -> None:
         await db.commit()
 
 
+async def _persist_case(case: EvalTaskCase) -> None:
+    """Persist one case's current result immediately in its own session.
+
+    This is what makes the task list show per-case progress: without it, case
+    stages are only committed after the whole stage's gather finishes, so a
+    20-case task appears frozen until every case is done. A targeted UPDATE on a
+    fresh session keeps us clear of the concurrently-mutated shared session.
+    """
+    try:
+        async with SessionLocal() as s:
+            await s.execute(
+                update(EvalTaskCase)
+                .where(EvalTaskCase.id == case.id)
+                .values(
+                    agent_output=case.agent_output,
+                    agent_latency_ms=case.agent_latency_ms,
+                    agent_file_result=case.agent_file_result,
+                    baseline_answer=case.baseline_answer,
+                    compare_result=case.compare_result,
+                    coze_exec_url=case.coze_exec_url,
+                    is_win=case.is_win,
+                    hallucination=case.hallucination,
+                    stage=case.stage,
+                    error_msg=case.error_msg,
+                )
+            )
+            await s.commit()
+    except Exception:  # noqa: BLE001 — progress persistence must never kill the run
+        logger.exception("persist case %s progress failed", case.id)
+
+
 async def _run_stage(db, cases, sem, worker) -> None:
     async def guarded(case):
         # Idempotency: skip cases already past this stage (supports retry).
@@ -88,6 +119,9 @@ async def _run_stage(db, cases, sem, worker) -> None:
                 logger.exception("case %s failed", case.id)
                 case.stage = CaseStage.failed
                 case.error_msg = str(exc) or type(exc).__name__
+            # Commit THIS case right away so the task list advances one-by-one
+            # instead of only when the whole stage finishes.
+            await _persist_case(case)
 
     await asyncio.gather(*(guarded(c) for c in cases))
     await db.commit()
