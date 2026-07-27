@@ -9,6 +9,7 @@ export interface TaskListItem {
   status: 'agent_running' | 'comparing' | 'completed' | 'failed'
   progress: string
   failed_count: number
+  retryable: boolean
   win_rate: number | null
   avg_latency_ms: number | null
   creator: string

@@ -108,15 +108,15 @@ function goCreate() {
   router.push({ name: 'cases' })
 }
 
-// 有失败用例、且当前不在执行中，即可重试（只重跑失败用例，不动已成功的）。
+// 存在未完成用例（失败/未跑/待对比）且不在执行中即可重试；只重跑未完成的，不动已成功的。
 function canRetry(row: TaskListItem) {
-  return row.failed_count > 0 && row.status !== 'agent_running' && row.status !== 'comparing'
+  return row.retryable
 }
 
 async function onRetry(row: TaskListItem) {
   if (!canRetry(row)) return
   await retryTask(row.id)
-  ElMessage.success(`已重新执行 ${row.failed_count} 个失败用例`)
+  ElMessage.success('已重新执行未完成的用例')
   load()
 }
 
@@ -214,7 +214,7 @@ onUnmounted(() => {
               </el-button>
             </el-tooltip>
             <el-tooltip
-              :content="canRetry(row) ? `重试 ${row.failed_count} 个失败用例` : '无失败用例可重试'"
+              :content="canRetry(row) ? '重试未完成的用例（已成功的不再重跑）' : '无未完成用例可重试'"
               placement="top"
             >
               <el-button

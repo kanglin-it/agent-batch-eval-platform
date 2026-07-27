@@ -33,10 +33,22 @@ def _failed_count(task: EvalTask) -> int:
     return sum(1 for c in task.cases if c.stage == CaseStage.failed)
 
 
+def _incomplete_count(task: EvalTask) -> int:
+    """Cases not yet finished (anything other than compared): failed / pending /
+    agent_done. These are exactly what a retry would (re)run."""
+    return sum(1 for c in task.cases if c.stage != CaseStage.compared)
+
+
+def _retryable(task: EvalTask) -> bool:
+    running = task.status in (TaskStatus.agent_running, TaskStatus.comparing)
+    return not running and _incomplete_count(task) > 0
+
+
 def _list_item(task: EvalTask) -> TaskListItem:
     return TaskListItem(
         progress=_progress(task),
         failed_count=_failed_count(task),
+        retryable=_retryable(task),
         **_task_fields(task),
     )
 
@@ -136,11 +148,11 @@ async def retry_task(
     await db.refresh(task, attribute_names=["cases"])
     if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
         raise HTTPException(400, "任务执行中，暂不可重试")
-    # Retry is allowed whenever there are failed cases — including a task that
-    # finished with a mix of success + failure (status=completed). run_task's
-    # stage idempotency re-runs only the failed cases and leaves succeeded ones.
-    if _failed_count(task) == 0:
-        raise HTTPException(400, "没有失败的用例，无需重试")
+    # Retry is allowed whenever there are unfinished cases — failed, never-run
+    # (pending, e.g. after a restart), or agent-done-but-not-compared. run_task's
+    # stage idempotency re-runs only those and leaves compared cases untouched.
+    if _incomplete_count(task) == 0:
+        raise HTTPException(400, "所有用例已完成，无需重试")
     task.status = TaskStatus.agent_running
     await db.commit()
     background.add_task(run_task, task.id)
