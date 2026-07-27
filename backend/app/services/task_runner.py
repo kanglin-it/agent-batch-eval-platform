@@ -22,7 +22,12 @@ from app.db.session import SessionLocal
 from app.services.agent_limiter import agent_slot
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
-from app.services.oss_file import build_file_result, prepare_agent_files, resolve_answer_text
+from app.services.oss_file import (
+    build_file_result,
+    extract_text,
+    prepare_agent_files,
+    resolve_answer_text,
+)
 from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
@@ -225,6 +230,29 @@ async def _extract_parsed_text(client, result_files: list) -> str:
     return "\n\n".join(blocks)
 
 
+async def _extract_output_files(client, result_files: list) -> str:
+    """Content of the Agent's generated deliverable files (excluding the parsed_*
+    input parses). For some modules (e.g. 文书起草) the answer IS a generated file,
+    not the SSE text — so this gets appended to agent_output. Downloaded as bytes and
+    text-extracted (docx/pdf/txt) so binary deliverables come through as text too.
+    """
+    blocks: list[str] = []
+    for f in result_files or []:
+        name = f.get("name") or ""
+        url = f.get("url")
+        if not url or name.startswith("parsed_"):
+            continue
+        try:
+            data = await client.download_bytes(url)
+            text = extract_text(name, data)
+        except Exception:  # noqa: BLE001 — one bad file must not sink the case
+            logger.exception("download output file failed url=%s", str(url)[:120])
+            continue
+        if text.strip():
+            blocks.append(f"【生成文件：{name}】\n{text.strip()}")
+    return "\n\n".join(blocks)
+
+
 async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str | None]:
     """Rerun a case through the Zhiexa sandbox Agent (create execution task).
 
@@ -247,11 +275,17 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str
     # Global cap (across all tasks AND workers) on concurrent Agent /api/chat runs.
     async with agent_slot():
         result = await client.execute(message=message, files=files or None)
-    parsed_text = await _extract_parsed_text(client, result.get("files") or []) if files else ""
+    result_files = result.get("files") or []
+    parsed_text = await _extract_parsed_text(client, result_files) if files else ""
+    # The answer may live in a generated file (not just the SSE text) — fold it in
+    # so answer_new / the Excel 新版答案 include it.
+    output_files_text = await _extract_output_files(client, result_files)
+    output = result.get("output") or ""
+    output = f"{output}\n\n{output_files_text}".strip() if output_files_text else output
     cid = result.get("conversation_id")
     # Public share link so the Excel can link straight to this Agent run.
     task_url = await client.share_link(cid) if cid else None
-    return result["output"], result["latency_ms"], parsed_text, cid, task_url
+    return output, result["latency_ms"], parsed_text, cid, task_url
 
 
 def _parse_stance(stance_raw) -> dict | None:

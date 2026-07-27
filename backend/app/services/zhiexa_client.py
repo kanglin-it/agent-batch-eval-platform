@@ -167,6 +167,14 @@ class ZhiexaClient:
             r.encoding = encoding
             return r.text
 
+    async def download_bytes(self, url: str) -> bytes:
+        """Download a signed file url as raw bytes (for docx/pdf output files)."""
+        async with httpx.AsyncClient(timeout=max(settings.zhiexa_chat_timeout, 120),
+                                     follow_redirects=True) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            return r.content
+
     # ---------- create execution task = POST /api/chat (SSE) ----------
     async def execute(
         self, message: str, files: list[tuple[str, bytes, str]] | None = None,
