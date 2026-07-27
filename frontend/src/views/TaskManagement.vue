@@ -129,7 +129,7 @@ async function onDownload(row: TaskListItem) {
   if (!canDownload(row)) return
   try {
     const res = await downloadResultExcel(row.id)
-    const blob = new Blob([res.data], { type: res.headers['content-type'] })
+    const blob = new Blob([res.data], { type: String(res.headers['content-type'] ?? '') })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

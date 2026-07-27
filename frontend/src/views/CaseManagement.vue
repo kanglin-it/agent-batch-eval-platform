@@ -212,8 +212,8 @@ async function onDownloadFiles(row: CaseItem) {
       params: { task_id: row.task_id },
       responseType: 'blob',
     })
-    const filename = parseFilename(res.headers['content-disposition']) || `用例文件_${row.task_id}`
-    const blob = new Blob([res.data], { type: res.headers['content-type'] })
+    const filename = parseFilename(String(res.headers['content-disposition'] ?? '')) || `用例文件_${row.task_id}`
+    const blob = new Blob([res.data], { type: String(res.headers['content-type'] ?? '') })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
