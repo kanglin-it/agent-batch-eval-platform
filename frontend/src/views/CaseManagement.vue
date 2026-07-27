@@ -29,6 +29,7 @@ const MODULE_LABELS: Record<string, string> = {
 
 const EXTRA_FIELD_OPTIONS = [
   { label: '二级功能', value: 'sub_function' },
+  { label: '文书类型', value: 'draft_type' },
   { label: '渠道', value: 'channel_type' },
   { label: '任务ID', value: 'task_id' },
 ]
@@ -36,6 +37,29 @@ const EXTRA_FIELD_OPTIONS = [
 /** 二级功能可选值（与后端 resolve_sources / document 子条件对齐） */
 const SUB_FUNCTION_OPTIONS = ['传统文书', '要素式', 'AI类案', 'AI搜法']
 const CHANNEL_OPTIONS = ['PC', 'H5', 'APP', 'MINI']
+/** 文书起草类型（对齐 file-assistant DraftType / draft_name） */
+const DRAFT_TYPE_OPTIONS = [
+  '智能起草',
+  '自由起草',
+  '合同起草',
+  '起诉状',
+  '上诉状',
+  '答辩状',
+  '律师函',
+  '代理词',
+  '证据清单',
+  '辩护意见',
+  '函件起草',
+  '劳动仲裁申请书',
+  '强制执行申请书',
+  '再审申请书',
+  '质证意见',
+  '程序性申请书',
+  '管辖权异议',
+  '延期举证申请',
+  '刑事阅卷笔录生成',
+  '通用文书类型',
+]
 
 function defaultDateRange(): [string, string] {
   const end = new Date()
@@ -519,6 +543,17 @@ onMounted(() => {
               style="width: 280px"
             >
               <el-option v-for="v in SUB_FUNCTION_OPTIONS" :key="v" :label="v" :value="v" />
+            </el-select>
+            <el-select
+              v-else-if="item.field === 'draft_type'"
+              v-model="item.value"
+              placeholder="选择文书类型"
+              clearable
+              filterable
+              allow-create
+              style="width: 280px"
+            >
+              <el-option v-for="v in DRAFT_TYPE_OPTIONS" :key="v" :label="v" :value="v" />
             </el-select>
             <el-select
               v-else-if="item.field === 'channel_type'"

@@ -16,7 +16,7 @@ class CaseFilter(BaseModel):
     exclude_failed: bool = True            # 默认只看 FINISH，显著减少扫描量
 
     # Extra dynamic conditions: [{"field": "...", "value": "..."}]
-    # Supported fields: sub_function | channel_type | task_id
+    # Supported fields: sub_function | channel_type | task_id | draft_type
     extra: list[dict] = Field(default_factory=list)
 
 

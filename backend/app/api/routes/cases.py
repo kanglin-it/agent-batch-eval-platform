@@ -124,6 +124,7 @@ def _source_filters(filters: CaseFilter) -> SourceFilters:
         task_id=extra.get("task_id"),
         channel_type=extra.get("channel_type"),
         sub_function=extra.get("sub_function"),
+        draft_type=extra.get("draft_type"),
     )
 
 
@@ -215,6 +216,7 @@ async def list_cases(
     sources = resolve_sources(
         filters.function_type or None,
         sub_function=sf.sub_function,
+        draft_type=sf.draft_type,
     )
     offset = (page - 1) * page_size
 
@@ -268,6 +270,7 @@ async def list_case_ids(
     sources = resolve_sources(
         filters.function_type or None,
         sub_function=sf.sub_function,
+        draft_type=sf.draft_type,
     )
     if not sources:
         return CaseIdsResponse(total=0, ids=[], capped=False)

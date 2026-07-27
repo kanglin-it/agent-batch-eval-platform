@@ -50,6 +50,8 @@ class SourceFilters:
     task_id: str | None = None
     channel_type: str | None = None
     sub_function: str | None = None  # 传统文书 / 要素式 / AI类案 / AI搜法
+    # 文书起草类型（智能起草/合同起草等）：模糊匹配 draft_name OR llm_category_name
+    draft_type: str | None = None
 
 
 def parse_extra(extra: list[dict] | None) -> dict[str, str]:
@@ -96,6 +98,28 @@ _DOC_DRAFT_QUESTION = (
     f"CASE WHEN {_DOC_ELEMENT} AND NULLIF(btrim(p.prompt_content), '') IS NULL "
     f"THEN '{_DOC_ELEMENT_FALLBACK_Q}' ELSE p.prompt_content END"
 )
+
+# 智能起草 ≈ 自由起草（file-assistant DraftType 同为 0）
+_DRAFT_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "智能起草": ("智能起草", "自由起草"),
+    "自由起草": ("自由起草", "智能起草"),
+}
+
+
+def _draft_type_clause(filters: SourceFilters) -> tuple[list[str], dict]:
+    """Fuzzy match draft_name OR llm_category_name (either hit is enough)."""
+    if not filters.draft_type:
+        return [], {}
+    aliases = _DRAFT_TYPE_ALIASES.get(filters.draft_type, (filters.draft_type,))
+    parts: list[str] = []
+    params: dict = {}
+    for i, alias in enumerate(aliases):
+        key = f"draft_type_{i}"
+        parts.append(
+            f"(t.draft_name ILIKE :{key} OR t.llm_category_name ILIKE :{key})"
+        )
+        params[key] = f"%{alias}%"
+    return ["(" + " OR ".join(parts) + ")"], params
 
 _AI_SUBFUNC = {"case_ai": "AI类案", "law_ai": "AI搜法"}
 
@@ -219,8 +243,9 @@ def resolve_sources(
     function_type: str | None,
     *,
     sub_function: str | None = None,
+    draft_type: str | None = None,
 ) -> list[str]:
-    """Resolve which sources to query; sub_function may further narrow the set."""
+    """Resolve which sources to query; sub_function / draft_type may further narrow."""
     if function_type:
         if function_type not in SOURCE_ORDER:
             return []
@@ -228,18 +253,21 @@ def resolve_sources(
     else:
         sources = list(SOURCE_ORDER)
 
-    if not sub_function:
-        return sources
+    if sub_function:
+        if sub_function in _SUBFUNC_TO_SOURCE:
+            want = _SUBFUNC_TO_SOURCE[sub_function]
+            sources = [want] if want in sources else []
+        elif sub_function in _DOC_SUBFUNCS:
+            sources = ["document_draft"] if "document_draft" in sources else []
+        else:
+            # Unknown sub_function → no rows (avoid silent broad scan)
+            return []
 
-    if sub_function in _SUBFUNC_TO_SOURCE:
-        want = _SUBFUNC_TO_SOURCE[sub_function]
-        return [want] if want in sources else []
+    # 文书类型只存在于文书起草任务
+    if draft_type:
+        sources = ["document_draft"] if "document_draft" in sources else []
 
-    if sub_function in _DOC_SUBFUNCS:
-        return ["document_draft"] if "document_draft" in sources else []
-
-    # Unknown sub_function → no rows (avoid silent broad scan)
-    return []
+    return sources
 
 
 def _doc_module_cond(filters: SourceFilters) -> str:
@@ -291,6 +319,9 @@ def build_list_source_sql(
             task_key="t.task_id", task_id_col="t.task_id", channel_col="t.channel_type",
             has_file_expr=has_file, filters=filters, schema=schema,
         )
+        dt_conds, dt_params = _draft_type_clause(filters)
+        extra.extend(dt_conds)
+        params.update(dt_params)
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
         sql = f"""
         SELECT 'qa' AS kind, 'document_draft' AS source, t.task_id AS task_id,
@@ -426,6 +457,9 @@ def build_capped_count_sql(
             task_key="t.task_id", task_id_col="t.task_id", channel_col="t.channel_type",
             has_file_expr=has_file, filters=filters, schema=schema,
         )
+        dt_conds, dt_params = _draft_type_clause(filters)
+        extra.extend(dt_conds)
+        params.update(dt_params)
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
         sql = f"""
         SELECT count(*)::bigint AS c FROM (
