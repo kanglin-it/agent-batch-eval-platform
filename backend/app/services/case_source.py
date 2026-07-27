@@ -99,6 +99,11 @@ _DOC_DRAFT_QUESTION = (
 
 _AI_SUBFUNC = {"case_ai": "AI类案", "law_ai": "AI搜法"}
 
+# case_ai/law_ai 的 created_at 是 timestamptz；其它表的 created 是 naive 本地时间。
+# 把 fuxi 的时间统一转成北京本地 naive，跨源合并排序和时间筛选才对齐。
+_LOCAL_TZ = "Asia/Shanghai"
+_FUXI_CREATED_LOCAL = f"(h.created_at AT TIME ZONE '{_LOCAL_TZ}')"
+
 # 只看主任务、过滤子任务：task_id == parent_task_id（无父也算主任务）。
 # 子任务 = parent_task_id 指向别的主任务 id。合同/文件审查用。
 _MAIN_TASK_ONLY = "(t.parent_task_id IS NULL OR t.parent_task_id = t.task_id)"
@@ -308,7 +313,7 @@ def build_list_source_sql(
     if source in ("case_ai", "law_ai"):
         has_file = _doc_ids_has_file("h.doc_ids")
         extra, params = _pushdown_clauses(
-            source, created_col="h.created_at", question_col="h.original_question",
+            source, created_col=_FUXI_CREATED_LOCAL, question_col="h.original_question",
             task_key="h.task_id", task_id_col="h.task_id", channel_col="h.channel_type",
             has_file_expr=has_file, filters=filters, schema=schema,
         )
@@ -316,7 +321,7 @@ def build_list_source_sql(
         sub_func = _AI_SUBFUNC[source]
         sql = f"""
         SELECT 'qa' AS kind, '{source}' AS source, h.task_id AS task_id,
-               h.original_question AS question, h.created_at AS src_created,
+               h.original_question AS question, {_FUXI_CREATED_LOCAL} AS src_created,
                '{sub_func}' AS sub_function,
                h.doc_ids AS doc_ids, h.project_id AS project_id,
                {has_file} AS has_file, h.channel_type AS channel_type
@@ -440,7 +445,7 @@ def build_capped_count_sql(
     if source in ("case_ai", "law_ai"):
         has_file = _doc_ids_has_file("h.doc_ids")
         extra, params = _pushdown_clauses(
-            source, created_col="h.created_at", question_col="h.original_question",
+            source, created_col=_FUXI_CREATED_LOCAL, question_col="h.original_question",
             task_key="h.task_id", task_id_col="h.task_id", channel_col="h.channel_type",
             has_file_expr=has_file, filters=filters, schema=schema,
         )
