@@ -86,6 +86,13 @@ _DOC_ELEMENT = (
 )
 _DOC_DRAFT_SUBFUNC = "CASE WHEN t.module = 'document_draft' THEN '要素式' ELSE '传统文书' END"
 
+# 要素式常常没有用户提问；此时给 Agent 一个固定任务指令，否则它不知道要做什么。
+_DOC_ELEMENT_FALLBACK_Q = "帮我基于这个文件生成要素式文书"
+_DOC_DRAFT_QUESTION = (
+    f"CASE WHEN {_DOC_ELEMENT} AND NULLIF(btrim(p.prompt_content), '') IS NULL "
+    f"THEN '{_DOC_ELEMENT_FALLBACK_Q}' ELSE p.prompt_content END"
+)
+
 _AI_SUBFUNC = {"case_ai": "AI类案", "law_ai": "AI搜法"}
 
 
@@ -617,7 +624,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
     if source == "document_draft":
         return f"""
         SELECT 'qa' AS kind, 'document_draft' AS source, t.task_id AS task_id,
-               p.prompt_content AS question,
+               {_DOC_DRAFT_QUESTION} AS question,
                NULLIF(btrim(regexp_replace(t.result, '^.*?zhiexa_reasoning_end', '', 's')), '') AS system_answer,
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
