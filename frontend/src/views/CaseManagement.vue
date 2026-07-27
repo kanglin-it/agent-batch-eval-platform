@@ -742,6 +742,15 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* 吸顶：滚动列表时「创建评测任务」按钮始终固定在顶部 */
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #f5f5f5; /* 与 .main 背景一致，列表从下方滚过时不穿透 */
+  /* 抵消 el-main 的 16px 上 / 24px 左右内边距，使吸顶条铺满且贴顶 */
+  margin: -16px -24px 0;
+  padding: 12px 24px;
+  box-shadow: 0 4px 8px -6px rgba(0, 0, 0, 0.12);
 }
 
 .page-title {
