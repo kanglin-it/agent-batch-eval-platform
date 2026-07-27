@@ -87,6 +87,13 @@ async def _warm_up_on_startup() -> None:
     asyncio.create_task(_warm_up_case_sources())
 
 
+@app.on_event("startup")
+async def _start_scheduler() -> None:
+    # Hourly poll that launches due scheduled tasks (multi-worker safe).
+    from app.services.scheduler import scheduler_loop
+    asyncio.create_task(scheduler_loop())
+
+
 @app.get("/health", tags=["meta"])
 async def health():
     return {"status": "ok"}

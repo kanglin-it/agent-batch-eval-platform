@@ -21,6 +21,7 @@ from app.db.session import Base
 
 
 class TaskStatus(str, enum.Enum):
+    scheduled = "scheduled"              # 定时待执行（到点由调度器拉起）
     agent_running = "agent_running"      # Agent 执行中 (x/N)
     comparing = "comparing"              # 对比评测中 (x/N)
     completed = "completed"              # 已完成 (N/N)
@@ -65,6 +66,11 @@ class EvalTask(Base):
 
     # Snapshot of the filter used, so the "用例范围" can be shown later.
     filter_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # 定时执行时间（整点，timestamptz）。NULL = 立即执行。
+    scheduled_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # Aggregated metrics
     win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)

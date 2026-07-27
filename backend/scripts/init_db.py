@@ -47,6 +47,12 @@ async def main() -> None:
             "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS creator_phone VARCHAR(30)"
         ))
         await conn.execute(text(
+            "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_eval_task_scheduled_at ON eval_task (scheduled_at)"
+        ))
+        await conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_eval_task_creator_phone ON eval_task (creator_phone)"
         ))
     print("Created tables:", ", ".join(t.name for t in OWNED_TABLES))

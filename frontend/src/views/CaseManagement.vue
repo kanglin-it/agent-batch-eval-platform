@@ -393,7 +393,14 @@ function togglePageSelect(checked: boolean) {
 }
 
 const dialogVisible = ref(false)
-const taskForm = reactive({ name: '', eval_workflow_id: '', creator: '' })
+const taskForm = reactive({ name: '', eval_workflow_id: '', creator: '', scheduled_at: '' })
+
+// 执行时间只能选未来整点：禁用今天之前的日期。value-format 里分秒固定为 00 → 只到整点。
+function disablePastDate(d: Date) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return d.getTime() < today.getTime()
+}
 const creating = ref(false)
 const workflowIds = ref<string[]>([])
 const workflowLoading = ref(false)
@@ -437,6 +444,7 @@ async function openCreateDialog() {
   taskForm.name = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
   taskForm.eval_workflow_id = ''
   taskForm.creator = '当前用户'
+  taskForm.scheduled_at = ''
   loadWorkflowIds()          // 拉历史 workflow_id 填充下拉（不阻塞弹窗打开）
   try {
     const me = await fetchMe()
@@ -456,6 +464,11 @@ async function submitTask() {
   if (ids.length > SELECTION_LIMIT) {
     return ElMessage.warning(`勾选用例最多 ${SELECTION_LIMIT} 条，当前已选 ${ids.length} 条`)
   }
+  // 定时执行：必须是未来整点（value-format 已把分秒固定为 00）
+  const scheduled = taskForm.scheduled_at || null
+  if (scheduled && new Date(scheduled.replace(' ', 'T')).getTime() <= Date.now()) {
+    return ElMessage.warning('执行时间必须晚于当前时间')
+  }
   creating.value = true
   try {
     await createTask({
@@ -464,8 +477,11 @@ async function submitTask() {
       case_ids: ids,
       filter_snapshot: { ...filters },
       creator: taskForm.creator.trim(),
+      scheduled_at: scheduled,
     })
-    ElMessage.success(`任务创建成功，共 ${ids.length} 条用例`)
+    ElMessage.success(
+      scheduled ? `已创建定时任务，将于 ${scheduled.slice(0, 16)} 执行` : `任务创建成功，共 ${ids.length} 条用例`,
+    )
     dialogVisible.value = false
     router.push({ name: 'tasks' })
   } finally {
@@ -750,6 +766,19 @@ onMounted(() => {
           >
             <el-option v-for="id in workflowIds" :key="id" :label="id" :value="id" />
           </el-select>
+        </el-form-item>
+
+        <el-form-item label="执行时间">
+          <el-date-picker
+            v-model="taskForm.scheduled_at"
+            type="datetime"
+            class="wf-select"
+            format="YYYY-MM-DD HH:00"
+            value-format="YYYY-MM-DD HH:00:00"
+            :disabled-date="disablePastDate"
+            placeholder="留空=立即执行；只能选未来整点"
+          />
+          <div class="scope-filters">留空则立即执行；选择后到整点由定时器自动执行（分钟自动归零）</div>
         </el-form-item>
 
         <el-form-item required>

@@ -6,7 +6,7 @@ export interface TaskListItem {
   eval_workflow_id: string
   eval_skill_id: string | null
   case_count: number
-  status: 'agent_running' | 'comparing' | 'completed' | 'failed'
+  status: 'scheduled' | 'agent_running' | 'comparing' | 'completed' | 'failed'
   progress: string
   failed_count: number
   retryable: boolean
@@ -14,6 +14,7 @@ export interface TaskListItem {
   avg_latency_ms: number | null
   creator: string
   created_at: string
+  scheduled_at: string | null
 }
 
 export interface TaskPage {
@@ -27,6 +28,7 @@ export interface CreateTaskPayload {
   case_ids: string[]
   filter_snapshot?: Record<string, unknown>
   creator?: string
+  scheduled_at?: string | null // 北京整点 "YYYY-MM-DD HH:00:00"；为空立即执行
 }
 
 export function listTasks(page = 1, pageSize = 20) {
@@ -49,4 +51,8 @@ export function retryTask(id: number) {
 
 export function downloadResultExcel(id: number) {
   return http.get(`/api/eval-tasks/${id}/download`, { responseType: 'blob' })
+}
+
+export function deleteTask(id: number) {
+  return http.delete(`/api/eval-tasks/${id}`).then((r) => r.data)
 }

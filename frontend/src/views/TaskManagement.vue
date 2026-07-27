@@ -3,7 +3,9 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { downloadResultExcel, listTasks, retryTask, type TaskListItem } from '@/api/task'
+import { ElMessageBox } from 'element-plus'
+
+import { deleteTask, downloadResultExcel, listTasks, retryTask, type TaskListItem } from '@/api/task'
 
 const router = useRouter()
 const tasks = ref<TaskListItem[]>([])
@@ -13,6 +15,7 @@ const page = reactive({ current: 1, size: 20 })
 let timer: ReturnType<typeof setInterval> | null = null
 
 const STATUS_LABEL: Record<TaskListItem['status'], string> = {
+  scheduled: '定时待执行',
   agent_running: 'Agent执行中',
   comparing: '对比评测中',
   completed: '已完成',
@@ -120,6 +123,31 @@ async function onRetry(row: TaskListItem) {
   load()
 }
 
+// 未在执行中的任务可删除（定时任务未跑之前删除即为“取消定时”）。
+function canDelete(row: TaskListItem) {
+  return row.status !== 'agent_running' && row.status !== 'comparing'
+}
+
+async function onDelete(row: TaskListItem) {
+  if (!canDelete(row)) return
+  const tip = row.status === 'scheduled' ? '确定取消这个定时任务吗？' : '确定删除这个任务吗？'
+  try {
+    await ElMessageBox.confirm(tip, '提示', { type: 'warning' })
+  } catch {
+    return // 用户取消
+  }
+  await deleteTask(row.id)
+  ElMessage.success(row.status === 'scheduled' ? '已取消定时任务' : '已删除')
+  load()
+}
+
+function formatSchedule(iso: string | null) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
 // Only finished tasks (completed / failed) can be downloaded; running ones can't.
 function canDownload(row: TaskListItem) {
   return row.status === 'completed' || row.status === 'failed'
@@ -152,6 +180,7 @@ function displayId(row: TaskListItem) {
 }
 
 function statusText(row: TaskListItem) {
+  if (row.status === 'scheduled') return `${STATUS_LABEL.scheduled}（${formatSchedule(row.scheduled_at)}）`
   if (row.status === 'failed') return STATUS_LABEL.failed
   const base = `${STATUS_LABEL[row.status]} (${row.progress})`
   // 已完成但有失败用例时，标出失败数，提示可重试
@@ -160,6 +189,7 @@ function statusText(row: TaskListItem) {
 
 function statusClass(status: TaskListItem['status']) {
   return {
+    scheduled: 'st-scheduled',
     agent_running: 'st-running',
     comparing: 'st-comparing',
     completed: 'st-done',
@@ -224,6 +254,19 @@ onUnmounted(() => {
                 @click="onRetry(row)"
               >
                 重试
+              </el-button>
+            </el-tooltip>
+            <el-tooltip
+              :content="row.status === 'scheduled' ? '取消定时任务' : '删除任务'"
+              placement="top"
+            >
+              <el-button
+                class="btn-delete"
+                size="small"
+                :disabled="!canDelete(row)"
+                @click="onDelete(row)"
+              >
+                {{ row.status === 'scheduled' ? '取消' : '删除' }}
               </el-button>
             </el-tooltip>
           </template>
@@ -318,6 +361,10 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+.st-scheduled {
+  color: #1677ff;
+}
+
 .st-running {
   color: #d48806;
 }
@@ -372,6 +419,26 @@ onUnmounted(() => {
   background: #ffccc7;
   border-color: #ffccc7;
   color: #fff;
+  opacity: 1;
+}
+
+.btn-delete {
+  background: #fff;
+  border-color: #dcdfe6;
+  color: #606266;
+}
+
+.btn-delete:hover:not(:disabled),
+.btn-delete:focus:not(:disabled) {
+  background: #fff1f0;
+  border-color: #ffa39e;
+  color: #cf1322;
+}
+
+.btn-delete:disabled {
+  background: #f5f5f5;
+  border-color: #ebeef5;
+  color: #c0c4cc;
   opacity: 1;
 }
 

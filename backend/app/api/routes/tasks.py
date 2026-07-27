@@ -1,3 +1,4 @@
+import datetime as dt
 import io
 from urllib.parse import quote
 
@@ -5,6 +6,22 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# China has no DST, so a fixed +08:00 offset is correct for Beijing wall-clock.
+_BEIJING = dt.timezone(dt.timedelta(hours=8))
+
+
+def _normalize_scheduled_at(value: dt.datetime | None) -> dt.datetime | None:
+    """Validate a scheduled time: whole hour, in the future (Beijing). Returns an
+    aware datetime, or None for immediate execution."""
+    if value is None:
+        return None
+    sched = value if value.tzinfo is not None else value.replace(tzinfo=_BEIJING)
+    if sched.minute or sched.second or sched.microsecond:
+        raise HTTPException(400, "执行时间必须是整点")
+    if sched <= dt.datetime.now(dt.timezone.utc):
+        raise HTTPException(400, "执行时间必须是将来的整点")
+    return sched
 
 from app.api.deps import get_current_user
 from app.api.routes.cases import CASE_SELECTION_LIMIT
@@ -44,8 +61,9 @@ def _incomplete_count(task: EvalTask) -> int:
 
 
 def _retryable(task: EvalTask) -> bool:
-    running = task.status in (TaskStatus.agent_running, TaskStatus.comparing)
-    return not running and _incomplete_count(task) > 0
+    # Only finished tasks (completed/failed) with leftover cases can be retried —
+    # never a scheduled (not yet run) or currently-running task.
+    return task.status in (TaskStatus.completed, TaskStatus.failed) and _incomplete_count(task) > 0
 
 
 def _list_item(task: EvalTask) -> TaskListItem:
@@ -71,6 +89,8 @@ async def create_task(
         raise HTTPException(400, f"勾选用例最多 {CASE_SELECTION_LIMIT} 条")
     case_ids = body.case_ids
 
+    scheduled_at = _normalize_scheduled_at(body.scheduled_at)
+
     # Hydrate each case (question / files / stance / historical baseline) from the
     # PG dataset tables so the Agent has real input to rerun.
     data = await fetch_case_data(case_db, case_ids)
@@ -79,7 +99,9 @@ async def create_task(
         name=body.name,
         eval_workflow_id=body.eval_workflow_id,
         case_count=len(case_ids),
-        status=TaskStatus.agent_running,
+        # 定时任务先挂起，到点由调度器拉起；否则立即执行。
+        status=TaskStatus.scheduled if scheduled_at else TaskStatus.agent_running,
+        scheduled_at=scheduled_at,
         creator=(body.creator or current.username).strip() or current.username,
         creator_phone=current.phone,          # recorded for reference (no isolation)
         filter_snapshot=body.filter_snapshot,
@@ -102,9 +124,9 @@ async def create_task(
     await db.commit()
     await db.refresh(task, attribute_names=["cases"])
 
-    # Kick off the two-stage async pipeline. In production use a real queue/worker
-    # (Celery / RQ / Arq) instead of BackgroundTasks so it survives restarts.
-    background.add_task(run_task, task.id)
+    # Immediate tasks start now; scheduled ones wait for the hourly poller.
+    if scheduled_at is None:
+        background.add_task(run_task, task.id)
 
     return _list_item(task)
 
@@ -158,6 +180,24 @@ async def retry_task(
     background.add_task(run_task, task.id)
     await db.refresh(task, attribute_names=["cases"])
     return _list_item(task)
+
+
+@router.delete("/{task_id}")
+async def delete_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Cancel/delete a task. Running tasks can't be deleted; a scheduled task is
+    thereby cancelled before it ever runs. Cascades to its cases."""
+    task = await db.get(EvalTask, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
+        raise HTTPException(400, "任务执行中，不可删除")
+    await db.delete(task)          # cascade deletes eval_task_case
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/workflow-ids", response_model=list[str])
@@ -242,4 +282,5 @@ def _task_fields(t: EvalTask) -> dict:
         "hallucination_count": t.hallucination_count,
         "creator": t.creator,
         "created_at": t.created_at,
+        "scheduled_at": t.scheduled_at,
     }
