@@ -620,7 +620,8 @@ def build_page_hydrate_sql(
 # ---------------------------------------------------------------------------
 
 def _review_file_json_sql(schema: str, ftype: str) -> str:
-    return f"""(SELECT jsonb_build_object('url', f.file_url, 'name', f.file_name)
+    return f"""(SELECT jsonb_build_object(
+              'url', f.file_url, 'name', f.file_name, 'file_id', f.file_id)
        FROM {schema}.t_file_info f
       WHERE f.task_id = t.task_id AND f.is_delete = 0
         AND f.file_type = '{ftype}' AND f.file_version = 1
@@ -674,7 +675,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance,
-               {_coze_debug_url_sql(schema, "t.chat_id")} AS baseline_coze_url
+               {_coze_debug_url_sql(schema, "t.chat_id")} AS baseline_coze_url,
+               NULL::text AS source_user_id
         FROM {schema}.t_legal_research_info t
         WHERE t.is_delete = 0
           AND (t.parent_chat_id IS NULL OR t.parent_chat_id = t.chat_id)
@@ -689,7 +691,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance,
-               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url,
+               NULL::text AS source_user_id
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
         WHERE t.is_delete = 0
@@ -708,7 +711,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                h.doc_ids AS attachment, h.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance,
-               {_coze_debug_url_sql(schema, "h.task_id")} AS baseline_coze_url
+               {_coze_debug_url_sql(schema, "h.task_id")} AS baseline_coze_url,
+               h.user_id AS source_user_id
         FROM {schema}.t_fuxi_history_task h
         WHERE h.is_deleted = 0 AND h.type = '{source}'
           AND h.parent_task_id IS NULL
@@ -727,7 +731,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                {stance} AS stance,
-               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url,
+               NULL::text AS source_user_id
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
         """
@@ -743,9 +748,65 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance,
-               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url,
+               NULL::text AS source_user_id
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)
         """
 
     raise ValueError(f"unknown source: {source}")
+
+
+def build_jump_meta_sql(*, schema: str = "public") -> str:
+    """Slim meta for 旧答案跳转链接：task_id / source / user_id / file_id / file_name。"""
+    parts = [
+        f"""
+        SELECT 'legal_research' AS source, t.chat_id AS task_id,
+               NULL::text AS user_id, NULL::text AS file_id, NULL::text AS file_name
+        FROM {schema}.t_legal_research_info t
+        WHERE t.chat_id = ANY(:ids)
+        """,
+        f"""
+        SELECT 'document_draft' AS source, t.task_id AS task_id,
+               NULL::text AS user_id, NULL::text AS file_id, NULL::text AS file_name
+        FROM {schema}.t_document_task t
+        WHERE t.task_id = ANY(:ids)
+        """,
+        f"""
+        SELECT h.type AS source, h.task_id AS task_id,
+               h.user_id AS user_id, NULL::text AS file_id, NULL::text AS file_name
+        FROM {schema}.t_fuxi_history_task h
+        WHERE h.task_id = ANY(:ids) AND h.type IN ('law_ai', 'case_ai')
+        """,
+        f"""
+        SELECT 'contract_review' AS source, t.task_id AS task_id,
+               NULL::text AS user_id,
+               (SELECT f.file_id FROM {schema}.t_file_info f
+                 WHERE f.task_id = t.task_id AND f.is_delete = 0
+                   AND f.file_type = 'original_file' AND f.file_version = 1
+                 ORDER BY f.created DESC LIMIT 1) AS file_id,
+               COALESCE(
+                 (SELECT f.file_name FROM {schema}.t_file_info f
+                   WHERE f.task_id = t.task_id AND f.is_delete = 0
+                     AND f.file_type = 'original_file' AND f.file_version = 1
+                   ORDER BY f.created DESC LIMIT 1),
+                 t.task_name
+               ) AS file_name
+        FROM {schema}.t_contract_tasks t
+        WHERE t.task_id = ANY(:ids)
+        """,
+        f"""
+        SELECT 'file_review' AS source, t.task_id AS task_id,
+               NULL::text AS user_id, NULL::text AS file_id,
+               COALESCE(
+                 (SELECT f.file_name FROM {schema}.t_file_info f
+                   WHERE f.task_id = t.task_id AND f.is_delete = 0
+                     AND f.file_type = 'original_file' AND f.file_version = 1
+                   ORDER BY f.created DESC LIMIT 1),
+                 t.origin_name, t.task_name
+               ) AS file_name
+        FROM {schema}.t_file_review_task t
+        WHERE t.task_id = ANY(:ids)
+        """,
+    ]
+    return "\nUNION ALL\n".join(f"({p})" for p in parts)

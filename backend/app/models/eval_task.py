@@ -109,6 +109,8 @@ class EvalTaskCase(Base):
     baseline_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 旧版 SaaS 任务在 t_coze_log.debug_url 上的执行链接
     baseline_coze_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 旧版产品页跳转链接（research / draft / detail / fileReview / fuxi download）
+    baseline_jump_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Comparison outcome
     compare_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)

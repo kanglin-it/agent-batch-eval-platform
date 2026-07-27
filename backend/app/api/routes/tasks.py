@@ -13,7 +13,11 @@ from app.db.session import get_db
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.task import CreateTaskRequest, TaskListItem, TaskPage
-from app.services.case_data import fetch_baseline_coze_urls, fetch_case_data
+from app.services.case_data import (
+    fetch_baseline_coze_urls,
+    fetch_baseline_jump_urls,
+    fetch_case_data,
+)
 from app.services.export_excel import build_result_xlsx
 from app.services.task_runner import run_task
 
@@ -89,6 +93,7 @@ async def create_task(
             stance=data.get(cid, {}).get("stance"),
             baseline_answer=data.get(cid, {}).get("baseline_answer"),
             baseline_coze_url=data.get(cid, {}).get("baseline_coze_url"),
+            baseline_jump_url=data.get(cid, {}).get("baseline_jump_url"),
             stage=CaseStage.pending,
         )
         for cid in case_ids
@@ -190,17 +195,30 @@ async def download_result(
     await db.refresh(task, attribute_names=["cases"])
     cases = sorted(task.cases, key=lambda c: c.id)
 
-    # 旧任务可能尚未落库 baseline_coze_url：下载时按 source_case_id 补查 t_coze_log
-    missing = [c.source_case_id for c in cases if not (c.baseline_coze_url or "").strip()]
-    if missing:
-        urls = await fetch_baseline_coze_urls(case_db, missing)
+    # 旧任务可能尚未落库 baseline_coze_url / baseline_jump_url：下载时补查
+    missing_coze = [c.source_case_id for c in cases if not (c.baseline_coze_url or "").strip()]
+    missing_jump = [c.source_case_id for c in cases if not (c.baseline_jump_url or "").strip()]
+    changed = False
+    if missing_coze:
+        urls = await fetch_baseline_coze_urls(case_db, missing_coze)
         if urls:
             for c in cases:
                 if not (c.baseline_coze_url or "").strip():
                     url = urls.get(c.source_case_id)
                     if url:
                         c.baseline_coze_url = url
-            await db.commit()
+                        changed = True
+    if missing_jump:
+        urls = await fetch_baseline_jump_urls(case_db, missing_jump)
+        if urls:
+            for c in cases:
+                if not (c.baseline_jump_url or "").strip():
+                    url = urls.get(c.source_case_id)
+                    if url:
+                        c.baseline_jump_url = url
+                        changed = True
+    if changed:
+        await db.commit()
 
     content = build_result_xlsx(task, cases)
     filename = quote(f"评测结果_{task.name}.xlsx")
