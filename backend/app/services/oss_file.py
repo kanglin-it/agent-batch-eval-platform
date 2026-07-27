@@ -178,16 +178,40 @@ def _docx_to_text(data: bytes) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
+def _pdf_to_text(data: bytes) -> str:
+    """Extract text from a PDF payload (pypdf). Empty on failure / if pypdf absent.
+
+    Keeps 旧侧 (file_result_old) able to parse PDFs, so it stays symmetric with the
+    Agent's new-side parse instead of showing an empty 解析内容.
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        logger.warning("pypdf not installed; cannot extract PDF text (pip install pypdf)")
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+    except Exception:  # noqa: BLE001 — corrupt / encrypted PDF
+        logger.exception("pdf text extraction failed")
+        return ""
+
+
 def extract_text(fname: str, data: bytes) -> str:
     """Downloaded file payload → text.
 
     - .docx (zip/PK)  → unzip and strip WordprocessingML (stdlib only)
+    - .pdf            → pypdf
     - plain text       → decode utf-8 / gb18030
-    - .pdf / legacy .doc / other binaries → "" (no extractor bundled)
+    - legacy .doc / other binaries → "" (no extractor bundled)
     """
     lower = (fname or "").lower()
     if data[:2] == b"PK" or lower.endswith(".docx"):
         text = _docx_to_text(data)
+        if text:
+            return text
+    if data[:4] == b"%PDF" or lower.endswith(".pdf"):
+        text = _pdf_to_text(data)
         if text:
             return text
     return _decode_text(data)
@@ -238,16 +262,24 @@ async def build_file_result(file_refs: list | None) -> str:
 
 
 async def prepare_agent_files(file_refs: list | None) -> list[tuple[str, bytes, str]]:
-    """Turn case.files entries into Agent upload tuples."""
+    """Turn case.files entries into Agent upload tuples.
+
+    Tolerate a single file failing (skip + log) so one bad file in a multi-file
+    case doesn't sink the whole case. Only raise when there were files to fetch
+    but every one failed — that case genuinely can't be evaluated.
+    """
     out: list[tuple[str, bytes, str]] = []
+    attempted = 0
     for item in file_refs or []:
         ref = normalize_file_ref(item)
         if ref is None:
             continue
+        attempted += 1
         url, name = ref
         try:
             out.append(await fetch_file_bytes(url, name))
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("failed to fetch/decrypt file url=%s name=%s", url[:120], name)
-            raise
+    if attempted and not out:
+        raise RuntimeError("待上传文件全部下载失败")
     return out
