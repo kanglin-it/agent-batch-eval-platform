@@ -370,7 +370,6 @@ def build_list_source_sql(
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0
-          AND {_MAIN_TASK_ONLY}
           {status}
           {_and(extra)}
         ORDER BY t.created DESC
@@ -487,7 +486,6 @@ def build_capped_count_sql(
         SELECT count(*)::bigint AS c FROM (
             SELECT 1 FROM {schema}.t_file_review_task t
             WHERE t.is_delete = 0
-              AND {_MAIN_TASK_ONLY}
               {status}
               {_and(extra)}
             LIMIT {lim}
@@ -689,7 +687,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance
         FROM {schema}.t_file_review_task t
-        WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
+        WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)
         """
 
     raise ValueError(f"unknown source: {source}")
