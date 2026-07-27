@@ -256,14 +256,21 @@ def fetch_legal_research(cur, schema="public", limit=100):
 
 
 def fetch_document_draft(cur, schema="public", limit=100):
-    """2) 文书起草 -> QA_COLS; 答案按 'zhiexa_reasoning_end' 切掉推理内容; 主任务 parent_task_id=task_id"""
+    """2) 文书起草 -> QA_COLS; 答案按 'zhiexa_reasoning_end' 切掉推理内容; 主任务 parent_task_id=task_id
+
+    传统文书: doc_generation_mode='document_assistant'
+    要素式:   module='document_draft' AND mode<>'document_assistant'
+    """
     cur.execute(f"""
         WITH ids AS (
             SELECT t.task_id, t.created
             FROM {schema}.t_document_task t
             WHERE t.is_delete = 0
-              AND t.module = 'document_assistant'
-              AND t.doc_generation_mode = 'document_assistant'
+              AND (
+                    t.doc_generation_mode = 'document_assistant'
+                 OR (t.module = 'document_draft'
+                     AND COALESCE(t.doc_generation_mode, '') <> 'document_assistant')
+              )
               AND t.task_status = 'FINISH'
               AND t.parent_task_id = t.task_id
             ORDER BY t.created DESC {_limit(limit)}

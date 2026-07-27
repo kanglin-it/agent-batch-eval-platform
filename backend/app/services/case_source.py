@@ -74,17 +74,21 @@ def _doc_ids_has_file(col: str) -> str:
 
 
 # 文书起草 = 传统文书 ∪ 要素式。
-_DOC_DRAFT_MODULE_COND = (
-    "((t.module = 'document_assistant' AND t.doc_generation_mode = 'document_assistant') "
-    "OR (t.module = 'document_draft' AND t.doc_generation_mode <> 'document_assistant'))"
-)
-_DOC_TRADITIONAL = (
-    "(t.module = 'document_assistant' AND t.doc_generation_mode = 'document_assistant')"
-)
+# 线上真实落库（以 doc_generation_mode 为准）：
+#   传统文书: doc_generation_mode='document_assistant'
+#             （常见 module=document_draft；另有 deep_seek / 极少数旧 document_assistant）
+#   要素式:   module='document_draft' 且 doc_generation_mode<>'document_assistant'
+#             （如 one_click_conversion_of_complaint / structured_complaint_form 等）
+_DOC_TRADITIONAL = "(t.doc_generation_mode = 'document_assistant')"
 _DOC_ELEMENT = (
-    "(t.module = 'document_draft' AND t.doc_generation_mode <> 'document_assistant')"
+    "(t.module = 'document_draft' AND COALESCE(t.doc_generation_mode, '') <> 'document_assistant')"
 )
-_DOC_DRAFT_SUBFUNC = "CASE WHEN t.module = 'document_draft' THEN '要素式' ELSE '传统文书' END"
+_DOC_DRAFT_MODULE_COND = f"({_DOC_TRADITIONAL} OR {_DOC_ELEMENT})"
+_DOC_DRAFT_SUBFUNC = (
+    "CASE WHEN t.module = 'document_draft' "
+    "AND COALESCE(t.doc_generation_mode, '') <> 'document_assistant' "
+    "THEN '要素式' ELSE '传统文书' END"
+)
 
 # 要素式常常没有用户提问；此时给 Agent 一个固定任务指令，否则它不知道要做什么。
 _DOC_ELEMENT_FALLBACK_Q = "帮我基于这个文件生成要素式文书"
@@ -285,7 +289,7 @@ def build_list_source_sql(
         status = "AND t.task_status = 'FINISH'" if filters.exclude_failed else ""
         sql = f"""
         SELECT 'qa' AS kind, 'document_draft' AS source, t.task_id AS task_id,
-               p.prompt_content AS question, t.created AS src_created,
+               {_DOC_DRAFT_QUESTION} AS question, t.created AS src_created,
                {_DOC_DRAFT_SUBFUNC} AS sub_function,
                t.doc_ids AS doc_ids, t.project_id AS project_id,
                {has_file} AS has_file, t.channel_type AS channel_type
