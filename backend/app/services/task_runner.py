@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 # calls). Configurable via [task] concurrency in config.ini (default 50).
 CONCURRENCY = settings.task_concurrency
 
+# Global cap on concurrent per-case DB writes — decoupled from Agent concurrency
+# so a high CONCURRENCY (or many parallel tasks) can't exhaust the write pool.
+_persist_sem = asyncio.Semaphore(settings.task_persist_concurrency)
+
 # Fixed agent prompts for review modules (question/task_name is not the user command).
 REVIEW_AGENT_PROMPTS = {
     "file_review": "请帮我审查一下这份文件",
@@ -89,7 +93,7 @@ async def _persist_case(case: EvalTaskCase) -> None:
     fresh session keeps us clear of the concurrently-mutated shared session.
     """
     try:
-        async with SessionLocal() as s:
+        async with _persist_sem, SessionLocal() as s:
             await s.execute(
                 update(EvalTaskCase)
                 .where(EvalTaskCase.id == case.id)

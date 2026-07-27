@@ -59,6 +59,11 @@ class Settings:
         db_name = s("database", "dbname", "saas")
         self.user_table = s("database", "user_table", "t_operation_user")
         self.database_url = _pg_url(db_host, db_port, db_user, db_pass, db_name)
+        # Write-DB connection pool. Sized above task_persist_concurrency + a few
+        # concurrent tasks' long-lived sessions. Keep under the PG instance's limit.
+        self.db_pool_size = i("database", "pool_size", 20)
+        self.db_max_overflow = i("database", "max_overflow", 10)
+        self.db_pool_timeout = i("database", "pool_timeout", 30)
 
         # ---- READ-ONLY database (replica): case data + login user table (t_operation_user).
         # Point this at the read-only replica; blank fields fall back to [database].
@@ -85,6 +90,9 @@ class Settings:
         # Max cases processed concurrently WITHIN one task (per-task cap on Agent/Coze
         # calls). Not a limit on how many tasks run at once.
         self.task_concurrency = i("task", "concurrency", 50)
+        # Cap on concurrent per-case DB writes (decoupled from Agent concurrency so a
+        # high task_concurrency can't exhaust the write-DB connection pool).
+        self.task_persist_concurrency = i("task", "persist_concurrency", 8)
 
         # ---- login (ops-platform password API; fast, replaces local hash verify) ----
         self.operation_login_url = s(
