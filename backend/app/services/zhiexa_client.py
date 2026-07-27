@@ -89,6 +89,34 @@ class ZhiexaClient:
         self._jwt = None
         self._jwt_exp = 0.0
 
+    # ---------- shareable task link ----------
+    async def share_link(self, conversation_id: str) -> str | None:
+        """Create (or fetch the existing) public share link for a conversation.
+
+        The workbench has no deep-link by cid; the only viewable-by-URL form is the
+        public share page https://.../share/<token>. Re-sharing the same cid returns
+        a stable token, so this is idempotent. Best-effort: returns None on failure.
+        """
+        if not conversation_id:
+            return None
+        try:
+            jwt = await self.get_jwt()
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(
+                    f"{settings.zhiexa_skill_base}/api/conversations/{conversation_id}/share",
+                    headers={"Authorization": f"Bearer {jwt}"},
+                    json={
+                        "expires_days": settings.zhiexa_share_expires_days,
+                        "allow_download": settings.zhiexa_share_allow_download,
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+            return (data.get("share") or {}).get("url")
+        except Exception:  # noqa: BLE001 — a missing link must not fail the case
+            logger.exception("share_link failed cid=%s", conversation_id)
+            return None
+
     # ---------- file upload (presign -> PUT OSS -> confirm) ----------
     async def _upload_file(
         self, client: httpx.AsyncClient, headers: dict, conversation_id: str,

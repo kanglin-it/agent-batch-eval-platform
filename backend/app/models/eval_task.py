@@ -101,6 +101,9 @@ class EvalTaskCase(Base):
     agent_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 新版文件解析结果 (Agent parsed the uploaded files into text) — file_result_new
     agent_file_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Agent 会话 id + 公开分享链接（工作台无深链，只能靠 /share/<token> 查看该任务）
+    agent_conversation_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    agent_task_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Historical baseline = the answer the SaaS system originally returned
     baseline_answer: Mapped[str | None] = mapped_column(Text, nullable=True)

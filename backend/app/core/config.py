@@ -114,6 +114,9 @@ class Settings:
         self.zhiexa_channel_type = s("zhiexa", "channel_type", "PC")
         self.zhiexa_jwt_ttl_seconds = i("zhiexa", "jwt_ttl_seconds", 518400)
         self.zhiexa_chat_timeout = i("zhiexa", "chat_timeout", 300)
+        # Public share link for each rerun conversation (Excel「Agent执行链接」).
+        self.zhiexa_share_expires_days = i("zhiexa", "share_expires_days", 365)
+        self.zhiexa_share_allow_download = s("zhiexa", "share_allow_download", "true").strip().lower() in ("1", "true", "yes")
 
         # ---- Coze evaluation workflow (Stage 2 对比评测) ----
         self.coze_api_base = s("coze", "api_base", "https://api.coze.cn")

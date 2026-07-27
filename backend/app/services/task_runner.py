@@ -101,6 +101,8 @@ async def _persist_case(case: EvalTaskCase) -> None:
                     agent_output=case.agent_output,
                     agent_latency_ms=case.agent_latency_ms,
                     agent_file_result=case.agent_file_result,
+                    agent_conversation_id=case.agent_conversation_id,
+                    agent_task_url=case.agent_task_url,
                     baseline_answer=case.baseline_answer,
                     compare_result=case.compare_result,
                     coze_exec_url=case.coze_exec_url,
@@ -136,10 +138,12 @@ async def _run_stage(db, cases, sem, worker) -> None:
 async def _stage_agent(case: EvalTaskCase) -> None:
     if case.stage in (CaseStage.agent_done, CaseStage.compared):
         return
-    output, latency, parsed = await _run_agent(case)
+    output, latency, parsed, cid, task_url = await _run_agent(case)
     case.agent_output = output
     case.agent_latency_ms = latency
     case.agent_file_result = parsed
+    case.agent_conversation_id = cid
+    case.agent_task_url = task_url
     case.stage = CaseStage.agent_done
     case.error_msg = None
 
@@ -220,13 +224,13 @@ async def _extract_parsed_text(client, result_files: list) -> str:
     return "\n\n".join(blocks)
 
 
-async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str]:
+async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str | None]:
     """Rerun a case through the Zhiexa sandbox Agent (create execution task).
 
     For 合同审查 / 文件审查, the user-facing command is a fixed prompt; files are
     downloaded from SaaS OSS (AES-decrypt when needed) and re-uploaded to Agent.
     When files are present we also ask the Agent to emit a parsed_*.txt (the new file
-    parse result). Returns (output, latency_ms, parsed_text).
+    parse result). Returns (output, latency_ms, parsed_text, conversation_id, task_url).
     """
     if case.source == "contract_review":
         task_message = _contract_review_message(case.stance)
@@ -241,7 +245,10 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str]:
     client = get_zhiexa_client()
     result = await client.execute(message=message, files=files or None)
     parsed_text = await _extract_parsed_text(client, result.get("files") or []) if files else ""
-    return result["output"], result["latency_ms"], parsed_text
+    cid = result.get("conversation_id")
+    # Public share link so the Excel can link straight to this Agent run.
+    task_url = await client.share_link(cid) if cid else None
+    return result["output"], result["latency_ms"], parsed_text, cid, task_url
 
 
 def _parse_stance(stance_raw) -> dict | None:
