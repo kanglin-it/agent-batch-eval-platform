@@ -93,6 +93,13 @@ class Settings:
         # Cap on concurrent per-case DB writes (decoupled from Agent concurrency so a
         # high task_concurrency can't exhaust the write-DB connection pool).
         self.task_persist_concurrency = i("task", "persist_concurrency", 8)
+        # GLOBAL cap on concurrent Agent executions across ALL tasks and workers
+        # (single shared Agent account). Enforced via a Redis distributed semaphore.
+        self.agent_concurrency = i("task", "agent_concurrency", 100)
+
+        # ---- Redis (distributed Agent-concurrency semaphore; multi-worker) ----
+        # e.g. redis://:password@host:6379/0 . Blank → per-worker fallback only.
+        self.redis_url = s("redis", "url")
 
         # ---- login (ops-platform password API; fast, replaces local hash verify) ----
         self.operation_login_url = s(

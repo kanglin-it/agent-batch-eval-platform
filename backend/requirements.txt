@@ -22,6 +22,9 @@ openpyxl==3.1.5
 # PDF text extraction for 旧侧文件解析 (file_result_old) — keep old/new symmetric
 pypdf==5.1.0
 
+# Distributed semaphore for the global Agent-concurrency cap (multi-worker)
+redis==5.2.1
+
 # Validation (schemas). Config is read from config.ini via stdlib configparser.
 pydantic==2.10.4
 python-multipart==0.0.20

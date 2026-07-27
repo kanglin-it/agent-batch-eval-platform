@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.services.agent_limiter import agent_slot
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
 from app.services.oss_file import build_file_result, prepare_agent_files, resolve_answer_text
@@ -243,7 +244,9 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str
     message = _PARSE_PROMPT.format(task=task_message) if files else task_message
 
     client = get_zhiexa_client()
-    result = await client.execute(message=message, files=files or None)
+    # Global cap (across all tasks AND workers) on concurrent Agent /api/chat runs.
+    async with agent_slot():
+        result = await client.execute(message=message, files=files or None)
     parsed_text = await _extract_parsed_text(client, result.get("files") or []) if files else ""
     cid = result.get("conversation_id")
     # Public share link so the Excel can link straight to this Agent run.
