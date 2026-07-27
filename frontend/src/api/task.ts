@@ -8,6 +8,7 @@ export interface TaskListItem {
   case_count: number
   status: 'agent_running' | 'comparing' | 'completed' | 'failed'
   progress: string
+  failed_count: number
   win_rate: number | null
   avg_latency_ms: number | null
   creator: string

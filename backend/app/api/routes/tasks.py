@@ -29,6 +29,18 @@ def _progress(task: EvalTask) -> str:
     return f"{done}/{task.case_count}"
 
 
+def _failed_count(task: EvalTask) -> int:
+    return sum(1 for c in task.cases if c.stage == CaseStage.failed)
+
+
+def _list_item(task: EvalTask) -> TaskListItem:
+    return TaskListItem(
+        progress=_progress(task),
+        failed_count=_failed_count(task),
+        **_task_fields(task),
+    )
+
+
 @router.post("", response_model=TaskListItem)
 async def create_task(
     body: CreateTaskRequest,
@@ -76,7 +88,7 @@ async def create_task(
     # (Celery / RQ / Arq) instead of BackgroundTasks so it survives restarts.
     background.add_task(run_task, task.id)
 
-    return TaskListItem(progress=_progress(task), **_task_fields(task))
+    return _list_item(task)
 
 
 @router.get("", response_model=TaskPage)
@@ -107,7 +119,7 @@ async def list_tasks(
     out = []
     for t in tasks:
         await db.refresh(t, attribute_names=["cases"])
-        out.append(TaskListItem(progress=_progress(t), **_task_fields(t)))
+        out.append(_list_item(t))
     return TaskPage(total=total, items=out)
 
 
@@ -121,14 +133,19 @@ async def retry_task(
     task = await db.get(EvalTask, task_id)
     if task is None or (not current.is_superuser and task.creator_phone != current.phone):
         raise HTTPException(404, "任务不存在")
-    if task.status != TaskStatus.failed:
-        raise HTTPException(400, "仅失败状态的任务可重试")
-    # Re-run the SAME task (do not create a new one); only failed cases are retried.
+    await db.refresh(task, attribute_names=["cases"])
+    if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
+        raise HTTPException(400, "任务执行中，暂不可重试")
+    # Retry is allowed whenever there are failed cases — including a task that
+    # finished with a mix of success + failure (status=completed). run_task's
+    # stage idempotency re-runs only the failed cases and leaves succeeded ones.
+    if _failed_count(task) == 0:
+        raise HTTPException(400, "没有失败的用例，无需重试")
     task.status = TaskStatus.agent_running
     await db.commit()
     background.add_task(run_task, task.id)
     await db.refresh(task, attribute_names=["cases"])
-    return TaskListItem(progress=_progress(task), **_task_fields(task))
+    return _list_item(task)
 
 
 @router.get("/workflow-ids", response_model=list[str])

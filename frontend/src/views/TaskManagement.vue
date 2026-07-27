@@ -108,9 +108,15 @@ function goCreate() {
   router.push({ name: 'cases' })
 }
 
+// 有失败用例、且当前不在执行中，即可重试（只重跑失败用例，不动已成功的）。
+function canRetry(row: TaskListItem) {
+  return row.failed_count > 0 && row.status !== 'agent_running' && row.status !== 'comparing'
+}
+
 async function onRetry(row: TaskListItem) {
+  if (!canRetry(row)) return
   await retryTask(row.id)
-  ElMessage.success('已重新执行')
+  ElMessage.success(`已重新执行 ${row.failed_count} 个失败用例`)
   load()
 }
 
@@ -147,7 +153,9 @@ function displayId(row: TaskListItem) {
 
 function statusText(row: TaskListItem) {
   if (row.status === 'failed') return STATUS_LABEL.failed
-  return `${STATUS_LABEL[row.status]} (${row.progress})`
+  const base = `${STATUS_LABEL[row.status]} (${row.progress})`
+  // 已完成但有失败用例时，标出失败数，提示可重试
+  return row.failed_count > 0 ? `${base}，${row.failed_count} 失败` : base
 }
 
 function statusClass(status: TaskListItem['status']) {
@@ -205,14 +213,19 @@ onUnmounted(() => {
                 下载
               </el-button>
             </el-tooltip>
-            <el-button
-              class="btn-retry"
-              size="small"
-              :disabled="row.status !== 'failed'"
-              @click="onRetry(row)"
+            <el-tooltip
+              :content="canRetry(row) ? `重试 ${row.failed_count} 个失败用例` : '无失败用例可重试'"
+              placement="top"
             >
-              重试
-            </el-button>
+              <el-button
+                class="btn-retry"
+                size="small"
+                :disabled="!canRetry(row)"
+                @click="onRetry(row)"
+              >
+                重试
+              </el-button>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

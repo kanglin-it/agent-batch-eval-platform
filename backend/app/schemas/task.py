@@ -21,6 +21,7 @@ class TaskListItem(BaseModel):
     case_count: int
     status: TaskStatus
     progress: str  # e.g. "230/1000"
+    failed_count: int = 0  # 失败用例数；>0 时可重试（只重跑失败用例）
     win_rate: float | None = None
     avg_latency_ms: float | None = None
     hallucination_count: int | None = None
