@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.task import CreateTaskRequest, TaskListItem, TaskPage
-from app.services.case_data import fetch_case_data
+from app.services.case_data import fetch_baseline_coze_urls, fetch_case_data
 from app.services.export_excel import build_result_xlsx
 from app.services.task_runner import run_task
 
@@ -88,6 +88,7 @@ async def create_task(
             files=data.get(cid, {}).get("files", []),
             stance=data.get(cid, {}).get("stance"),
             baseline_answer=data.get(cid, {}).get("baseline_answer"),
+            baseline_coze_url=data.get(cid, {}).get("baseline_coze_url"),
             stage=CaseStage.pending,
         )
         for cid in case_ids
@@ -177,6 +178,7 @@ async def list_workflow_ids(
 async def download_result(
     task_id: int,
     db: AsyncSession = Depends(get_db),
+    case_db: AsyncSession = Depends(get_case_db),
     current: CurrentUser = Depends(get_current_user),
 ):
     """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
@@ -187,6 +189,18 @@ async def download_result(
         raise HTTPException(400, "任务执行中，暂不可下载")
     await db.refresh(task, attribute_names=["cases"])
     cases = sorted(task.cases, key=lambda c: c.id)
+
+    # 旧任务可能尚未落库 baseline_coze_url：下载时按 source_case_id 补查 t_coze_log
+    missing = [c.source_case_id for c in cases if not (c.baseline_coze_url or "").strip()]
+    if missing:
+        urls = await fetch_baseline_coze_urls(case_db, missing)
+        if urls:
+            for c in cases:
+                if not (c.baseline_coze_url or "").strip():
+                    url = urls.get(c.source_case_id)
+                    if url:
+                        c.baseline_coze_url = url
+            await db.commit()
 
     content = build_result_xlsx(task, cases)
     filename = quote(f"评测结果_{task.name}.xlsx")

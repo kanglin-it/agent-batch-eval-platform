@@ -650,6 +650,16 @@ def _contract_stance_sql(schema: str) -> str:
       LIMIT 1)"""
 
 
+def _coze_debug_url_sql(schema: str, task_key: str) -> str:
+    """旧版任务 Coze 执行链接：t_coze_log.debug_url，按 task_id 取最新非空一条。"""
+    return f"""(SELECT cl.debug_url
+       FROM {schema}.t_coze_log cl
+      WHERE cl.task_id = {task_key}
+        AND cl.debug_url IS NOT NULL AND btrim(cl.debug_url) <> ''
+      ORDER BY cl.id DESC
+      LIMIT 1)"""
+
+
 def build_hydrate_sql(*, schema: str = "public", function_type: str | None = None) -> str:
     sources = resolve_sources(function_type) or list(SOURCE_ORDER)
     parts = [_hydrate_source_sql(schema, s) for s in sources]
@@ -663,7 +673,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                t.question AS question, t.llm_answer AS system_answer,
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
-               NULL::jsonb AS stance
+               NULL::jsonb AS stance,
+               {_coze_debug_url_sql(schema, "t.chat_id")} AS baseline_coze_url
         FROM {schema}.t_legal_research_info t
         WHERE t.is_delete = 0
           AND (t.parent_chat_id IS NULL OR t.parent_chat_id = t.chat_id)
@@ -677,7 +688,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                NULLIF(btrim(regexp_replace(t.result, '^.*?zhiexa_reasoning_end', '', 's')), '') AS system_answer,
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
-               NULL::jsonb AS stance
+               NULL::jsonb AS stance,
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
         FROM {schema}.t_document_task t
         LEFT JOIN {schema}.t_document_prompt p ON p.prompt_id = t.prompt_id
         WHERE t.is_delete = 0
@@ -695,7 +707,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                h.original_question AS question, {answer} AS system_answer,
                h.doc_ids AS attachment, h.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
-               NULL::jsonb AS stance
+               NULL::jsonb AS stance,
+               {_coze_debug_url_sql(schema, "h.task_id")} AS baseline_coze_url
         FROM {schema}.t_fuxi_history_task h
         WHERE h.is_deleted = 0 AND h.type = '{source}'
           AND h.parent_task_id IS NULL
@@ -713,7 +726,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                {_contract_answer_sql(schema)} AS system_answer,
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
-               {stance} AS stance
+               {stance} AS stance,
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
         """
@@ -728,7 +742,8 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                {_file_review_answer_sql()} AS system_answer,
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
-               jsonb_build_object('custom_require', t.custom_require) AS stance
+               jsonb_build_object('custom_require', t.custom_require) AS stance,
+               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)
         """

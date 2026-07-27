@@ -107,10 +107,12 @@ class EvalTaskCase(Base):
 
     # Historical baseline = the answer the SaaS system originally returned
     baseline_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 旧版 SaaS 任务在 t_coze_log.debug_url 上的执行链接
+    baseline_coze_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Comparison outcome
     compare_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    coze_exec_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Coze 执行链接(debug_url)
+    coze_exec_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # 评测 Coze 执行链接(debug_url)
     is_win: Mapped[bool | None] = mapped_column(nullable=True)
     hallucination: Mapped[bool | None] = mapped_column(nullable=True)
 

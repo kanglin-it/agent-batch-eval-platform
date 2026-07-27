@@ -20,7 +20,7 @@ from app.utils.text_fix import recover_chinese_text
 
 
 async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, dict]:
-    """Return {task_id: {source, question, files, stance, baseline_answer}}."""
+    """Return {task_id: {source, question, files, stance, baseline_answer, baseline_coze_url}}."""
     if not task_ids:
         return {}
 
@@ -62,6 +62,7 @@ async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, di
             "files": files,
             "stance": stance,
             "baseline_answer": baseline or "",
+            "baseline_coze_url": (r.get("baseline_coze_url") or "").strip() or None,
         }
 
     # Resolve QA files (doc_ids/project_id -> OSS urls) concurrently via the library.
@@ -74,6 +75,22 @@ async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, di
                 out[tid]["files"] = fs
 
     return out
+
+
+async def fetch_baseline_coze_urls(db: AsyncSession, task_ids: list[str]) -> dict[str, str]:
+    """Map source task_id -> t_coze_log.debug_url (latest non-empty per task)."""
+    if not task_ids:
+        return {}
+    schema = settings.case_schema
+    sql = text(f"""
+        SELECT DISTINCT ON (cl.task_id) cl.task_id, cl.debug_url
+          FROM {schema}.t_coze_log cl
+         WHERE cl.task_id = ANY(:ids)
+           AND cl.debug_url IS NOT NULL AND btrim(cl.debug_url) <> ''
+         ORDER BY cl.task_id, cl.id DESC
+    """)
+    rows = (await db.execute(sql, {"ids": task_ids})).mappings().all()
+    return {r["task_id"]: r["debug_url"].strip() for r in rows if r.get("debug_url")}
 
 
 def _as_json(v):
