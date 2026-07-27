@@ -231,44 +231,46 @@ onUnmounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="creator" label="创建人" width="120" />
-        <el-table-column label="操作" width="180" align="center" fixed="right">
+        <el-table-column label="操作" width="230" align="center" fixed="right">
           <template #default="{ row }">
-            <el-tooltip :content="canDownload(row) ? '下载 评测结果Excel' : '任务执行中，暂不可下载'" placement="top">
-              <el-button
-                class="btn-download"
-                size="small"
-                :disabled="!canDownload(row)"
-                @click="onDownload(row)"
+            <div class="ops">
+              <el-tooltip :content="canDownload(row) ? '下载 评测结果Excel' : '任务执行中，暂不可下载'" placement="top">
+                <el-button
+                  class="btn-download"
+                  size="small"
+                  :disabled="!canDownload(row)"
+                  @click="onDownload(row)"
+                >
+                  下载
+                </el-button>
+              </el-tooltip>
+              <el-tooltip
+                :content="canRetry(row) ? '重试未完成的用例（已成功的不再重跑）' : '无未完成用例可重试'"
+                placement="top"
               >
-                下载
-              </el-button>
-            </el-tooltip>
-            <el-tooltip
-              :content="canRetry(row) ? '重试未完成的用例（已成功的不再重跑）' : '无未完成用例可重试'"
-              placement="top"
-            >
-              <el-button
-                class="btn-retry"
-                size="small"
-                :disabled="!canRetry(row)"
-                @click="onRetry(row)"
+                <el-button
+                  class="btn-retry"
+                  size="small"
+                  :disabled="!canRetry(row)"
+                  @click="onRetry(row)"
+                >
+                  重试
+                </el-button>
+              </el-tooltip>
+              <el-tooltip
+                :content="row.status === 'scheduled' ? '取消定时任务' : '删除任务'"
+                placement="top"
               >
-                重试
-              </el-button>
-            </el-tooltip>
-            <el-tooltip
-              :content="row.status === 'scheduled' ? '取消定时任务' : '删除任务'"
-              placement="top"
-            >
-              <el-button
-                class="btn-delete"
-                size="small"
-                :disabled="!canDelete(row)"
-                @click="onDelete(row)"
-              >
-                {{ row.status === 'scheduled' ? '取消' : '删除' }}
-              </el-button>
-            </el-tooltip>
+                <el-button
+                  class="btn-delete"
+                  size="small"
+                  :disabled="!canDelete(row)"
+                  @click="onDelete(row)"
+                >
+                  {{ row.status === 'scheduled' ? '取消' : '删除' }}
+                </el-button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -379,6 +381,19 @@ onUnmounted(() => {
 
 .st-failed {
   color: #cf1322;
+}
+
+/* 操作三按钮同一行展示，不再换行 */
+.ops {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+.ops :deep(.el-button) {
+  margin-left: 0;
 }
 
 .btn-download {
