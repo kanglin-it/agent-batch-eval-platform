@@ -81,6 +81,11 @@ class Settings:
         self.runtime_config_path = s("app", "runtime_config_path", "runtime_config.json")
         self.cors_origins = s("app", "cors_origins", "http://localhost:5173")
 
+        # ---- task runner ----
+        # Max cases processed concurrently WITHIN one task (per-task cap on Agent/Coze
+        # calls). Not a limit on how many tasks run at once.
+        self.task_concurrency = i("task", "concurrency", 50)
+
         # ---- login (ops-platform password API; fast, replaces local hash verify) ----
         self.operation_login_url = s(
             "auth", "login_url",

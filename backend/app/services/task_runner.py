@@ -17,6 +17,7 @@ import logging
 
 from sqlalchemy import select, update
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
@@ -25,8 +26,9 @@ from app.services.zhiexa_client import get_zhiexa_client
 
 logger = logging.getLogger(__name__)
 
-# Protect downstream Agent/Coze services from 500 concurrent calls.
-CONCURRENCY = 5
+# Max cases processed concurrently WITHIN one task (per-task cap on Agent/Coze
+# calls). Configurable via [task] concurrency in config.ini (default 50).
+CONCURRENCY = settings.task_concurrency
 
 # Fixed agent prompts for review modules (question/task_name is not the user command).
 REVIEW_AGENT_PROMPTS = {
