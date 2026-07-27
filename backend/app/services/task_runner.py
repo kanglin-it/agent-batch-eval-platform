@@ -187,27 +187,37 @@ def _contract_review_message(stance_raw) -> str:
     return message
 
 
-# When files are attached, ask the Agent to also save the parsed full text as a
-# downloadable txt (parsed_*.txt) — that becomes file_result_new for the eval.
+# When files are attached, ask the Agent to also save each file's parsed full text
+# as a downloadable txt (parsed_<原文件名>.txt) — these become file_result_new.
+# One file per input keeps it aligned with file_result_old's per-file structure.
 _PARSE_PROMPT = (
     "请处理我上传的文件，分两步执行：\n"
-    "1. 把文件的全部内容原样提取成纯文本，用 save_file_for_download 保存为一个 txt 文件"
-    "（文件名以 parsed_ 开头）；\n"
+    "1. 对【每一个】上传的文件，分别把它的全部内容原样提取成纯文本，"
+    "各用 save_file_for_download 保存为一个 txt 文件（文件名以 parsed_ 开头，"
+    "并带上原文件名，如 parsed_<原文件名>.txt）；有几个文件就存几个，不要遗漏；\n"
     "2. 然后完成任务：{task}\n"
 )
 
 
 async def _extract_parsed_text(client, result_files: list) -> str:
-    """Find the parsed_*.txt deliverable and download it as text."""
+    """Collect ALL parsed_*.txt deliverables and concatenate them.
+
+    The Agent may emit one parsed_ file per input (multi-file cases); grabbing only
+    the first would drop the rest, leaving file_result_new incomplete and
+    asymmetric with file_result_old. Each block is labelled with its filename.
+    """
+    blocks: list[str] = []
     for f in result_files or []:
         name = f.get("name") or ""
-        if name.startswith("parsed_") and f.get("url"):
-            try:
-                return await client.download_text(f["url"])
-            except Exception:  # noqa: BLE001
-                logger.exception("download parsed text failed url=%s", str(f.get("url"))[:120])
-                return ""
-    return ""
+        if not (name.startswith("parsed_") and f.get("url")):
+            continue
+        try:
+            text = await client.download_text(f["url"])
+        except Exception:  # noqa: BLE001
+            logger.exception("download parsed text failed url=%s", str(f.get("url"))[:120])
+            continue
+        blocks.append(f"【{name}】\n{text}")
+    return "\n\n".join(blocks)
 
 
 async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str]:
