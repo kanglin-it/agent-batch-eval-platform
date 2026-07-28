@@ -197,7 +197,22 @@ class ZhiexaClient:
             if files:
                 files.clear()
 
-            texts: list[str] = []
+            # Extract ONLY the final answer, not the intermediate process.
+            # The Agent runs a multi-round loop: each round may emit `text` narration
+            # ("我先读取一下文件…") before calling a tool — those are middle steps, not
+            # the answer. Rules (per the /api/chat event contract):
+            #   • task_complete.summary is the authoritative final answer (AI 调
+            #     attempt_completion 收尾时发) — prefer it when present.
+            #   • Otherwise the answer is the `text` emitted AFTER the last tool call.
+            #     Reset the buffer on every tool_start, so only the trailing text (the
+            #     final round, which calls no tool) survives. attempt_completion does
+            #     NOT emit tool_start, so this never drops the summary text.
+            # Everything else — text_delta / tool_* / skill_* / notes_update /
+            # todos_update / search_results / compacted / docx_op / lawyer_reco — is
+            # process noise and ignored.
+            answer_parts: list[str] = []
+            final_summary: str | None = None
+            err_msg: str | None = None
             try:
                 async with client.stream(
                     "POST", f"{settings.zhiexa_skill_base}/api/chat", headers=headers,
@@ -222,10 +237,27 @@ class ZhiexaClient:
                         etype = evt.get("type") or evt.get("event")
                         if etype == "conversation":
                             cid = evt.get("conversation_id") or evt.get("id") or cid
-                        elif etype in ("text", "message", "answer") or "content" in evt:
-                            chunk = evt.get("content") or evt.get("text") or evt.get("delta")
+                        elif etype == "tool_start":
+                            # 进入工具调用 → 之前的 text 都是中间叙述，丢弃
+                            answer_parts.clear()
+                        elif etype == "text":
+                            chunk = evt.get("content") or evt.get("text")
                             if isinstance(chunk, str):
-                                texts.append(chunk)
+                                answer_parts.append(chunk)
+                        elif etype == "task_complete":
+                            summary = evt.get("summary")
+                            if isinstance(summary, str) and summary.strip():
+                                final_summary = summary
+                        elif etype in ("paywall", "error"):
+                            err_msg = (
+                                evt.get("message") or evt.get("content")
+                                or ("余额/额度不足，任务未执行" if etype == "paywall"
+                                    else "Agent 执行出错")
+                            )
+                        elif etype in ("ask_user", "plan_review"):
+                            # 任务在等用户补充输入/审批，没有自然跑完 → 非终态结果
+                            if not final_summary:
+                                err_msg = err_msg or "Agent 需要补充输入，任务未完成"
                         elif etype == "done":
                             break
             except httpx.HTTPStatusError as exc:
@@ -240,6 +272,13 @@ class ZhiexaClient:
                     )
                 raise
 
+            # Final answer: task_complete.summary wins; else the text after the last
+            # tool. Fail loudly (paywall/error/需补充输入) only when we got no answer,
+            # so a spurious late error can't discard a valid summary.
+            output = final_summary if final_summary is not None else "".join(answer_parts)
+            if err_msg and not output.strip():
+                raise RuntimeError(err_msg)
+
             # AI-generated deliverables (e.g. the parsed_*.txt we asked for).
             result_files: list[dict] = []
             try:
@@ -247,7 +286,7 @@ class ZhiexaClient:
             except Exception:  # noqa: BLE001
                 logger.exception("fetch result files failed cid=%s", cid)
 
-        return {"output": "".join(texts), "conversation_id": cid,
+        return {"output": output, "conversation_id": cid,
                 "latency_ms": int((time.monotonic() - start) * 1000),
                 "files": result_files}
 
