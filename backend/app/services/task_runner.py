@@ -159,6 +159,19 @@ async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str
             case.files = None
 
 
+def _scrub_nul(value):
+    """Strip NUL (0x00) — PostgreSQL text/JSON columns reject it ("invalid byte
+    sequence for encoding UTF8: 0x00"). PDF/docx extraction and Agent output can
+    carry stray NUL bytes; recurse into the JSON compare_result too."""
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, dict):
+        return {k: _scrub_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_nul(v) for v in value]
+    return value
+
+
 async def _persist_case(case: EvalTaskCase) -> None:
     """Persist one case's current result immediately in its own session.
 
@@ -166,6 +179,9 @@ async def _persist_case(case: EvalTaskCase) -> None:
     stages are only committed after the whole stage's gather finishes, so a
     20-case task appears frozen until every case is done. A targeted UPDATE on a
     fresh session keeps us clear of the concurrently-mutated shared session.
+
+    All text/JSON values are NUL-scrubbed here — this is the single write boundary,
+    so nothing reaches PG with a 0x00 byte that would abort the UPDATE.
     """
     try:
         async with _persist_sem, SessionLocal() as s:
@@ -173,18 +189,18 @@ async def _persist_case(case: EvalTaskCase) -> None:
                 update(EvalTaskCase)
                 .where(EvalTaskCase.id == case.id)
                 .values(
-                    agent_output=case.agent_output,
+                    agent_output=_scrub_nul(case.agent_output),
                     agent_latency_ms=case.agent_latency_ms,
-                    agent_file_result=case.agent_file_result,
+                    agent_file_result=_scrub_nul(case.agent_file_result),
                     agent_conversation_id=case.agent_conversation_id,
                     agent_task_url=case.agent_task_url,
-                    baseline_answer=case.baseline_answer,
-                    compare_result=case.compare_result,
+                    baseline_answer=_scrub_nul(case.baseline_answer),
+                    compare_result=_scrub_nul(case.compare_result),
                     coze_exec_url=case.coze_exec_url,
                     is_win=case.is_win,
                     hallucination=case.hallucination,
                     stage=case.stage,
-                    error_msg=case.error_msg,
+                    error_msg=_scrub_nul(case.error_msg),
                 )
             )
             await s.commit()
@@ -196,9 +212,11 @@ async def _stage_agent(case: EvalTaskCase) -> None:
     if case.stage in (CaseStage.agent_done, CaseStage.compared):
         return
     output, latency, parsed, cid, task_url = await _run_agent(case)
-    case.agent_output = output
+    # Scrub NUL at the source so both the DB write AND the Coze call (which runs
+    # before the next persist and also rejects 0x00) get clean text.
+    case.agent_output = _scrub_nul(output)
     case.agent_latency_ms = latency
-    case.agent_file_result = parsed
+    case.agent_file_result = _scrub_nul(parsed)
     case.agent_conversation_id = cid
     case.agent_task_url = task_url
     case.stage = CaseStage.agent_done
@@ -408,13 +426,15 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
         build_file_result(case.files),
         resolve_answer_text(case.baseline_answer),
     )
-    params = {
+    # Scrub NUL from every Coze input — old-side text comes from PDF/docx extraction
+    # which can carry 0x00; Coze rejects it just like PG does.
+    params = _scrub_nul({
         "query": _compare_query(case),
         "file_result_old": file_result_old,
         "file_result_new": case.agent_file_result or "",   # Agent 解析出的纯文本
         "answer_old": answer_old,
         "answer_new": case.agent_output or "",
-    }
+    })
     logger.info("[Compare] case=%s source=%s → 调 Coze workflow=%s", case.id, case.source, workflow_id)
     out, exec_url = await run_eval(workflow_id, params)
 
