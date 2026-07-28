@@ -200,6 +200,8 @@ async def delete_task(
     if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
         raise HTTPException(400, "任务执行中，不可删除")
     task.is_delete = True
+    task.deleted_by = current.username          # 审计：记录删除操作人
+    task.deleted_at = dt.datetime.now(dt.timezone.utc)
     await db.commit()
     return {"ok": True}
 

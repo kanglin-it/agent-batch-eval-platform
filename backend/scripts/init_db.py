@@ -53,6 +53,12 @@ async def main() -> None:
             "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS is_delete BOOLEAN NOT NULL DEFAULT FALSE"
         ))
         await conn.execute(text(
+            "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(150)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE eval_task ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_eval_task_scheduled_at ON eval_task (scheduled_at)"
         ))
         await conn.execute(text(

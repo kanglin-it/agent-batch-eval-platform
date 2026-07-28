@@ -80,6 +80,9 @@ class EvalTask(Base):
 
     # 逻辑删除标记：True = 已删除（列表/查询/调度一律过滤，不做物理删除）。
     is_delete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    # 删除审计：谁在什么时候删的（仅逻辑删除时写入）。
+    deleted_by: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
