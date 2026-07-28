@@ -138,13 +138,16 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
-    # No isolation: every logged-in user sees all tasks.
+    # No isolation: every logged-in user sees all tasks (except logically-deleted).
     total = int(
-        (await db.execute(select(func.count()).select_from(EvalTask))).scalar_one() or 0
+        (await db.execute(
+            select(func.count()).select_from(EvalTask).where(EvalTask.is_delete.is_(False))
+        )).scalar_one() or 0
     )
 
     stmt = (
         select(EvalTask)
+        .where(EvalTask.is_delete.is_(False))
         .order_by(EvalTask.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -165,7 +168,7 @@ async def retry_task(
     current: CurrentUser = Depends(get_current_user),
 ):
     task = await db.get(EvalTask, task_id)
-    if task is None:
+    if task is None or task.is_delete:
         raise HTTPException(404, "任务不存在")
     await db.refresh(task, attribute_names=["cases"])
     if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
@@ -189,13 +192,14 @@ async def delete_task(
     current: CurrentUser = Depends(get_current_user),
 ):
     """Cancel/delete a task. Running tasks can't be deleted; a scheduled task is
-    thereby cancelled before it ever runs. Cascades to its cases."""
+    thereby cancelled before it ever runs. Logical delete only (is_delete=True) —
+    no physical delete, so the task and its results can be recovered if needed."""
     task = await db.get(EvalTask, task_id)
-    if task is None:
+    if task is None or task.is_delete:
         raise HTTPException(404, "任务不存在")
     if task.status in (TaskStatus.agent_running, TaskStatus.comparing):
         raise HTTPException(400, "任务执行中，不可删除")
-    await db.delete(task)          # cascade deletes eval_task_case
+    task.is_delete = True
     await db.commit()
     return {"ok": True}
 
@@ -211,7 +215,11 @@ async def list_workflow_ids(
     """
     stmt = (
         select(EvalTask.eval_workflow_id)
-        .where(EvalTask.eval_workflow_id.isnot(None), EvalTask.eval_workflow_id != "")
+        .where(
+            EvalTask.eval_workflow_id.isnot(None),
+            EvalTask.eval_workflow_id != "",
+            EvalTask.is_delete.is_(False),
+        )
         .group_by(EvalTask.eval_workflow_id)
         .order_by(func.max(EvalTask.created_at).desc())
     )
@@ -228,7 +236,7 @@ async def download_result(
 ):
     """Download the 评测结果 Excel for a task (no 幻觉数 column)."""
     task = await db.get(EvalTask, task_id)
-    if task is None:
+    if task is None or task.is_delete:
         raise HTTPException(404, "任务不存在")
     if task.status not in (TaskStatus.completed, TaskStatus.failed):
         raise HTTPException(400, "任务执行中，暂不可下载")

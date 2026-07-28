@@ -59,9 +59,11 @@ async def _poll_due_tasks() -> None:
 
     # Guard 2: atomic claim — each due row flips to agent_running exactly once.
     async with SessionLocal() as db:
+        # is_delete guard: a cancelled (logically-deleted) scheduled task keeps
+        # status='scheduled', so it must be excluded here or it would still fire.
         result = await db.execute(text(
             "UPDATE eval_task SET status='agent_running', updated_at=now() "
-            "WHERE status='scheduled' AND scheduled_at <= now() "
+            "WHERE status='scheduled' AND scheduled_at <= now() AND is_delete = false "
             "RETURNING id"
         ))
         ids = [row[0] for row in result.fetchall()]

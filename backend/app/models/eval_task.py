@@ -7,6 +7,7 @@ import enum
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Enum,
     Float,
@@ -76,6 +77,9 @@ class EvalTask(Base):
     win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     avg_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     hallucination_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # 逻辑删除标记：True = 已删除（列表/查询/调度一律过滤，不做物理删除）。
+    is_delete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
