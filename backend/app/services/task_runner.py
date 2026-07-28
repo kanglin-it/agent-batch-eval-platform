@@ -17,8 +17,10 @@ import logging
 from sqlalchemy import select, update
 
 from app.core.config import settings
+from app.db.case_session import CaseSessionLocal
 from app.db.session import SessionLocal
 from app.services.agent_limiter import agent_slot
+from app.services.case_data import fetch_case_data
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
 from app.services.oss_file import (
@@ -99,6 +101,31 @@ async def run_task(task_id: int) -> None:
         await db.commit()
 
 
+async def _refresh_case_files(case: EvalTaskCase) -> None:
+    """Re-resolve this case's file URLs from source right before use.
+
+    File URLs are captured at task-creation (hydrate) time. For QA sources they come
+    from the library public/query API as pre-signed OSS URLs with a baked-in
+    `Expires`; for review sources straight from the SaaS `file_url`. Either way the
+    signature goes stale if the task runs later than creation — scheduled tasks that
+    wait for their hour, queue backlog, or a retry hours later — yielding 403
+    Forbidden ("待上传文件全部下载失败") when the Agent downloads them.
+
+    Re-hydrating from the SaaS source re-calls the library (or re-reads file_url),
+    producing fresh, unexpired URLs. Best-effort: on any failure we keep the stored
+    snapshot and let the download attempt proceed with it."""
+    if not (case.source_case_id and case.files):
+        return
+    try:
+        async with CaseSessionLocal() as case_db:
+            data = await fetch_case_data(case_db, [case.source_case_id])
+        fresh = (data.get(case.source_case_id) or {}).get("files")
+        if fresh:
+            case.files = fresh
+    except Exception:  # noqa: BLE001 — a stale URL is still better than not trying
+        logger.exception("refresh case %s files failed; using stored urls", case.id)
+
+
 async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str) -> None:
     """Agent → 对比 for a single case, then free its large text fields.
 
@@ -107,6 +134,11 @@ async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str
     (skip agent_done/compared) keeps retries correct."""
     async with sem:
         try:
+            # Refresh pre-signed file URLs (they expire; see _refresh_case_files) so
+            # both the Agent upload and the old-side parse use live URLs. Skip for
+            # already-compared cases (a retry) — they touch no files.
+            if case.stage != CaseStage.compared:
+                await _refresh_case_files(case)
             await _stage_agent(case)            # sets agent_output/file_result/…
             if case.stage == CaseStage.agent_done:
                 await _persist_case(case)
