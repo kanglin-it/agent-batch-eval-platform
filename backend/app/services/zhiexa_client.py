@@ -22,6 +22,7 @@ import uuid
 import httpx
 
 from app.core.config import settings
+from app.services.oss_file import fetch_file_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -177,25 +178,39 @@ class ZhiexaClient:
 
     # ---------- create execution task = POST /api/chat (SSE) ----------
     async def execute(
-        self, message: str, files: list[tuple[str, bytes, str]] | None = None,
+        self, message: str, file_refs: list[tuple[str, str]] | None = None,
         conversation_id: str | None = None, *, _auth_retry: bool = True,
     ) -> dict:
-        """Run one Agent task. `files` = list of (filename, bytes, content_type).
-        Returns {output, conversation_id, latency_ms}."""
+        """Run one Agent task. `file_refs` = list of (url, name); each is fetched,
+        decrypted and uploaded one at a time to bound memory.
+        Returns {output, conversation_id, latency_ms, files}."""
         jwt = await self.get_jwt()
         headers = {"Authorization": f"Bearer {jwt}"}
         cid = conversation_id or str(uuid.uuid4())
         start = time.monotonic()
 
         async with httpx.AsyncClient(timeout=settings.zhiexa_chat_timeout) as client:
+            # Stream input files ONE AT A TIME — fetch → upload → free bytes — so we
+            # never hold every input file's bytes at once. A case with many/large
+            # files (e.g. 阅卷笔录 = dozens of per-page PDFs) would otherwise pile
+            # them all in memory and OOM the pod. Only the small upload metadata is
+            # kept. Tolerate a single bad file (skip + log); raise only if there were
+            # files to upload and every one failed (that case can't be evaluated).
             uploaded: list[dict] = []
-            for filename, data, ctype in files or []:
-                uploaded.append(await self._upload_file(client, headers, cid, filename, data, ctype))
-            # Files are now on OSS; drop the (potentially large) input bytes before
-            # the minutes-long SSE so they don't sit in pod memory. Clearing the list
-            # frees them from the caller too (same object) — caller uses `had_files`.
-            if files:
-                files.clear()
+            attempted = 0
+            for url, name in file_refs or []:
+                attempted += 1
+                try:
+                    fname, data, ctype = await fetch_file_bytes(url, name)
+                except Exception:  # noqa: BLE001 — one bad file must not sink the case
+                    logger.exception("fetch input file failed url=%s name=%s", url[:120], name)
+                    continue
+                try:
+                    uploaded.append(await self._upload_file(client, headers, cid, fname, data, ctype))
+                finally:
+                    data = None  # free this file's bytes before fetching the next
+            if attempted and not uploaded:
+                raise RuntimeError("待上传文件全部下载失败")
 
             # Extract ONLY the final answer, not the intermediate process.
             # The Agent runs a multi-round loop: each round may emit `text` narration
@@ -268,7 +283,7 @@ class ZhiexaClient:
                 ):
                     self.invalidate_jwt()
                     return await self.execute(
-                        message=message, files=files, conversation_id=cid, _auth_retry=False,
+                        message=message, file_refs=file_refs, conversation_id=cid, _auth_retry=False,
                     )
                 raise
 

@@ -26,7 +26,7 @@ from app.services.coze_client import run_eval
 from app.services.oss_file import (
     build_file_result,
     extract_text,
-    prepare_agent_files,
+    normalize_agent_file_refs,
     resolve_answer_text,
 )
 from app.services.zhiexa_client import get_zhiexa_client
@@ -319,16 +319,16 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str
     else:
         task_message = case.question or ""
 
-    files = await prepare_agent_files(case.files)
-    had_files = bool(files)
+    file_refs = normalize_agent_file_refs(case.files)
+    had_files = bool(file_refs)
     message = _PARSE_PROMPT.format(task=task_message) if had_files else task_message
 
     client = get_zhiexa_client()
     # Global cap (across all tasks AND workers) on concurrent Agent /api/chat runs.
-    # execute() frees the uploaded input bytes after upload, so `files` may be empty
-    # afterwards — gate the parse extraction on had_files, not files.
+    # execute() streams the input files one at a time (fetch → upload → free), so the
+    # pod never holds every input file's bytes at once.
     async with agent_slot():
-        result = await client.execute(message=message, files=files or None)
+        result = await client.execute(message=message, file_refs=file_refs or None)
     result_files = result.get("files") or []
     parsed_text = await _extract_parsed_text(client, result_files) if had_files else ""
     # The answer may live in a generated file (not just the SSE text) — fold it in

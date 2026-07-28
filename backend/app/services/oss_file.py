@@ -261,25 +261,17 @@ async def build_file_result(file_refs: list | None) -> str:
     return "\n\n".join(blocks)
 
 
-async def prepare_agent_files(file_refs: list | None) -> list[tuple[str, bytes, str]]:
-    """Turn case.files entries into Agent upload tuples.
+def normalize_agent_file_refs(file_refs: list | None) -> list[tuple[str, str]]:
+    """Normalize case.files entries into (url, name) refs for the Agent upload.
 
-    Tolerate a single file failing (skip + log) so one bad file in a multi-file
-    case doesn't sink the whole case. Only raise when there were files to fetch
-    but every one failed — that case genuinely can't be evaluated.
+    We deliberately DON'T download bytes here: the caller streams each file
+    (fetch → upload → discard) one at a time so a case with many/large files
+    (e.g. 阅卷笔录 = dozens of per-page PDFs) never holds every file's bytes in
+    memory at once. Downloading + decrypting is done just-in-time per file.
     """
-    out: list[tuple[str, bytes, str]] = []
-    attempted = 0
+    out: list[tuple[str, str]] = []
     for item in file_refs or []:
         ref = normalize_file_ref(item)
-        if ref is None:
-            continue
-        attempted += 1
-        url, name = ref
-        try:
-            out.append(await fetch_file_bytes(url, name))
-        except Exception:  # noqa: BLE001
-            logger.exception("failed to fetch/decrypt file url=%s name=%s", url[:120], name)
-    if attempted and not out:
-        raise RuntimeError("待上传文件全部下载失败")
+        if ref is not None:
+            out.append(ref)
     return out
