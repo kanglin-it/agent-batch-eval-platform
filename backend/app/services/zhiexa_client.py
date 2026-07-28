@@ -26,6 +26,12 @@ from app.services.oss_file import fetch_file_bytes
 
 logger = logging.getLogger(__name__)
 
+# File-upload transient-error retry. Zhiexa's /api/upload/confirm occasionally 500s
+# (staging load / OSS eventual-consistency race between the PUT and the confirm's
+# server-side check); a single blip shouldn't sink the whole case.
+_UPLOAD_ATTEMPTS = 3
+_UPLOAD_BACKOFF = 0.5  # seconds; exponential: 0.5s, 1s, ...
+
 
 class ZhiexaClient:
     def __init__(self) -> None:
@@ -123,26 +129,48 @@ class ZhiexaClient:
         self, client: httpx.AsyncClient, headers: dict, conversation_id: str,
         filename: str, data: bytes, content_type: str,
     ) -> dict:
-        presign = await client.post(
-            f"{settings.zhiexa_skill_base}/api/upload/presign",
-            headers=headers,
-            json={"filename": filename, "file_size": len(data),
-                  "content_type": content_type, "conversation_id": conversation_id},
-        )
-        presign.raise_for_status()
-        pr = presign.json()
-        file_meta = pr["file"]
+        """presign → PUT-to-OSS → confirm, retrying transient failures.
 
-        put = await client.put(pr["put_url"], content=data,
-                               headers={"Content-Type": pr.get("content_type", content_type)})
-        put.raise_for_status()
+        Retries the whole 3-step upload on 5xx / network / timeout errors (fresh
+        presign each attempt avoids the OSS not-yet-visible race). 4xx are our bug —
+        fail fast. After all attempts, re-raise so the case fails (retryable)."""
+        last_exc: Exception | None = None
+        for attempt in range(_UPLOAD_ATTEMPTS):
+            try:
+                presign = await client.post(
+                    f"{settings.zhiexa_skill_base}/api/upload/presign",
+                    headers=headers,
+                    json={"filename": filename, "file_size": len(data),
+                          "content_type": content_type, "conversation_id": conversation_id},
+                )
+                presign.raise_for_status()
+                pr = presign.json()
+                file_meta = pr["file"]
 
-        confirm = await client.post(
-            f"{settings.zhiexa_skill_base}/api/upload/confirm",
-            headers=headers, json={"file": file_meta, "conversation_id": conversation_id},
-        )
-        confirm.raise_for_status()
-        return file_meta
+                put = await client.put(pr["put_url"], content=data,
+                                       headers={"Content-Type": pr.get("content_type", content_type)})
+                put.raise_for_status()
+
+                confirm = await client.post(
+                    f"{settings.zhiexa_skill_base}/api/upload/confirm",
+                    headers=headers, json={"file": file_meta, "conversation_id": conversation_id},
+                )
+                confirm.raise_for_status()
+                return file_meta
+            except httpx.HTTPStatusError as exc:
+                # Only 5xx is transient; 4xx means a bad request on our side — no point retrying.
+                if exc.response is None or exc.response.status_code < 500:
+                    raise
+                last_exc = exc
+            except httpx.TransportError as exc:  # timeouts, conn resets, protocol errors
+                last_exc = exc
+            if attempt < _UPLOAD_ATTEMPTS - 1:
+                logger.warning(
+                    "upload %s attempt %d/%d failed (%s); retrying",
+                    filename, attempt + 1, _UPLOAD_ATTEMPTS, type(last_exc).__name__,
+                )
+                await asyncio.sleep(_UPLOAD_BACKOFF * (2 ** attempt))
+        raise last_exc  # type: ignore[misc]  # exhausted retries — fail the case (retryable)
 
     # ---------- result artifacts (AI-generated deliverables) ----------
     async def _result_files(self, client: httpx.AsyncClient, headers: dict, cid: str) -> list[dict]:
