@@ -41,6 +41,12 @@ CONCURRENCY = settings.task_concurrency
 # so a high CONCURRENCY (or many parallel tasks) can't exhaust the write pool.
 _persist_sem = asyncio.Semaphore(settings.task_persist_concurrency)
 
+# Cap the parsed-file text sent to Coze (file_result_old / file_result_new). Very
+# large parses (e.g. 阅卷笔录 = 几十页 PDF) blow up the eval workflow's runtime and
+# can time it out; keep only the first 20万字. Applies to BOTH old (SaaS 文件解析)
+# and new (Agent 文件解析) sides, so the comparison stays symmetric.
+_FILE_RESULT_MAX_CHARS = 200_000
+
 # Fixed agent prompts for review modules (question/task_name is not the user command).
 REVIEW_AGENT_PROMPTS = {
     "file_review": "请帮我审查一下这份文件",
@@ -157,6 +163,18 @@ async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str
             case.baseline_answer = None
             case.compare_result = None
             case.files = None
+
+
+def _cap_file_result(s: str | None, *, case_id: int | None = None, side: str = "") -> str:
+    """Truncate parsed-file text to the first _FILE_RESULT_MAX_CHARS chars for Coze."""
+    s = s or ""
+    if len(s) <= _FILE_RESULT_MAX_CHARS:
+        return s
+    logger.info(
+        "[Compare] case=%s file_result_%s 超长(%d字)，截断到前%d字",
+        case_id, side, len(s), _FILE_RESULT_MAX_CHARS,
+    )
+    return s[:_FILE_RESULT_MAX_CHARS]
 
 
 def _scrub_nul(value):
@@ -432,8 +450,9 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
     # which can carry 0x00; Coze rejects it just like PG does.
     params = _scrub_nul({
         "query": _compare_query(case),
-        "file_result_old": file_result_old,
-        "file_result_new": case.agent_file_result or "",   # Agent 解析出的纯文本
+        # 文件解析入参超过 20万字则只取前 20万字（新旧对称，防止 Coze 工作流超时）
+        "file_result_old": _cap_file_result(file_result_old, case_id=case.id, side="old"),
+        "file_result_new": _cap_file_result(case.agent_file_result, case_id=case.id, side="new"),
         "answer_old": answer_old,
         "answer_new": case.agent_output or "",
     })
