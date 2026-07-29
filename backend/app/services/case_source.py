@@ -160,9 +160,10 @@ def _review_has_file_sql(schema: str) -> str:
     )"""
 
 
-def _review_file_ids_sql(schema: str) -> str:
-    """审查类用例的所有文件 file_id（待审 + 参考），用于按 text_length 汇总附件字数。"""
-    return f"""(SELECT jsonb_agg(f.file_id)
+def _review_charcount_sql(schema: str) -> str:
+    """审查类用例的附件总字数：t_file_info.file_count 求和（待审 + 参考文件）。
+    审查类字数直接在 SaaS 库，不用走 library。"""
+    return f"""(SELECT COALESCE(SUM(f.file_count), 0)
        FROM {schema}.t_file_info f
       WHERE f.task_id = t.task_id AND f.is_delete = 0
         AND f.file_type IN ('original_file', 'reference_file') AND f.file_version = 1)"""
@@ -389,7 +390,7 @@ def build_list_source_sql(
                t.task_name AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
-               {_review_file_ids_sql(schema)} AS file_ids,
+               {_review_charcount_sql(schema)} AS attach_chars,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
@@ -416,7 +417,7 @@ def build_list_source_sql(
                {qcol} AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
-               {_review_file_ids_sql(schema)} AS file_ids,
+               {_review_charcount_sql(schema)} AS attach_chars,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0

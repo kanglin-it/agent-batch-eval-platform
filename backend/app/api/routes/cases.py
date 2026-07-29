@@ -191,28 +191,21 @@ _ATTACHMENT_SIZE_BUCKETS = {
 }
 
 
-def _row_file_ids(r: dict) -> list[str]:
-    """A case row's file identifiers: QA 用 doc_ids，审查类用 file_ids(t_file_info)。"""
-    raw = r.get("doc_ids") if r.get("kind") == "qa" else r.get("file_ids")
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    return _parse_doc_ids(raw)  # JSON string list / bare id
-
-
 async def _filter_by_attachment_size(rows: list[dict], size: str) -> list[dict]:
-    """Keep rows whose total 文件字数 (Σ text_length via library) matches the bucket.
+    """Keep rows whose total 文件字数 matches the bucket.
 
-    text_length only exists in the library API, so we batch-resolve every candidate
-    row's file ids in one shot and sum per case. Best-effort: on library failure the
-    字数 falls back to 0 (rows won't be dropped for a transient library error beyond
-    what the bucket implies)."""
+    - 审查类(合同/文件审查): 字数已由 SQL 给出 (attach_chars = Σ t_file_info.file_count)。
+    - 问答类(法研/文书/类案/搜法): 字数只在 library — batch-resolve 各用例 doc_ids 的
+      text_length 求和。Best-effort: library 失败时字数按 0 计。
+    """
     pred = _ATTACHMENT_SIZE_BUCKETS.get(size)
     if pred is None:
         return rows
-    row_ids = [_row_file_ids(r) for r in rows]
-    all_ids = [i for ids in row_ids for i in ids]
+    # Only QA rows need the library round-trip; review rows carry attach_chars.
+    all_ids = [
+        i for r in rows if r.get("kind") == "qa"
+        for i in _parse_doc_ids(r.get("doc_ids"))
+    ]
     lengths: dict[str, int] = {}
     if all_ids:
         try:
@@ -220,8 +213,11 @@ async def _filter_by_attachment_size(rows: list[dict], size: str) -> list[dict]:
         except Exception:  # noqa: BLE001 — never fail the list over the size filter
             logger.exception("resolve text_lengths failed (%d ids)", len(set(all_ids)))
     out: list[dict] = []
-    for r, ids in zip(rows, row_ids):
-        total = sum(lengths.get(i, 0) for i in ids)
+    for r in rows:
+        if r.get("kind") == "qa":
+            total = sum(lengths.get(i, 0) for i in _parse_doc_ids(r.get("doc_ids")))
+        else:
+            total = int(r.get("attach_chars") or 0)
         if pred(total):
             out.append(r)
     return out
