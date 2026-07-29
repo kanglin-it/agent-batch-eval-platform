@@ -130,23 +130,62 @@ async def resolve_oss_urls(project_id: str | None, doc_ids: str | None) -> list[
     return out
 
 
-_TEXTLEN_CHUNK = 100  # public/query file_ids batch size
+# public/query is ~linear in id count (~100ms/id), so keep batches small; a stalled
+# big batch would otherwise drag the whole list request. Cache text_length in Redis
+# (immutable per file) so repeated list/paging requests avoid re-querying.
+_TEXTLEN_CHUNK = 30
+_TEXTLEN_TTL = 15 * 24 * 3600            # 15 天
+_TEXTLEN_CACHE_PREFIX = "libtextlen:"
+
+_redis = None
+
+
+def _get_redis():
+    global _redis
+    if _redis is None and settings.redis_url:
+        import redis.asyncio as aioredis  # lazy
+        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis
 
 
 async def resolve_text_lengths(file_ids: list[str]) -> dict[str, int]:
-    """Resolve {file_id: text_length} for many files via the public library API.
+    """Resolve {file_id: text_length} for many files, Redis-cached (15d TTL).
 
-    Feeds the 附件大小 list filter, which sums each case's 文件字数. Queried in
-    batches of file_ids. The returned id is mapped under every id-ish key the API
-    provides (doc_id/file_id/...), so a caller's lookup by its original id hits.
-    Best-effort: returns {} / partial on failure — unknown ids just won't be in the map.
+    Feeds the 附件大小 list filter, which sums each case's 文件字数. text_length is
+    immutable per file, so results are cached in Redis and only cache-miss ids hit
+    the (linear-cost) library API, in small batches. Each completed batch is written
+    to cache immediately, so even a partial/timed-out run warms the cache for next
+    time. Best-effort: on any failure the map is simply partial.
     """
     ids = list(dict.fromkeys(i for i in (str(x).strip() for x in (file_ids or [])) if i))
     if not ids or not settings.library_service:
         return {}
+
     out: dict[str, int] = {}
+    missing = ids
+    r = _get_redis()
+    if r is not None:
+        try:
+            cached = await r.mget([_TEXTLEN_CACHE_PREFIX + i for i in ids])
+            missing = []
+            for i, v in zip(ids, cached):
+                if v is None:
+                    missing.append(i)
+                    continue
+                try:
+                    out[i] = int(v)
+                except (TypeError, ValueError):
+                    missing.append(i)
+        except Exception:  # noqa: BLE001 — cache is best-effort, fall back to API
+            logger.exception("redis mget text_length failed")
+            missing = ids
+
+    if not missing:
+        return out
+
     async with httpx.AsyncClient(timeout=settings.library_timeout) as client:
         async def one(chunk: list[str]) -> None:
+            resolved: dict[str, int] = {}
             for f in await _query(client, {"file_ids": chunk}):
                 if not isinstance(f, dict):
                     continue
@@ -156,8 +195,21 @@ async def resolve_text_lengths(file_ids: list[str]) -> dict[str, int]:
                 for key in _ID_KEYS:
                     v = f.get(key)
                     if v:
-                        out[str(v).strip()] = int(tl)
+                        resolved[str(v).strip()] = int(tl)
+            if not resolved:
+                return
+            out.update(resolved)
+            # Persist this batch right away so a later request (or a subsequent
+            # batch that times out) still benefits from what already resolved.
+            if r is not None:
+                try:
+                    pipe = r.pipeline()
+                    for k, tl in resolved.items():
+                        pipe.set(_TEXTLEN_CACHE_PREFIX + k, tl, ex=_TEXTLEN_TTL)
+                    await pipe.execute()
+                except Exception:  # noqa: BLE001 — caching must never break the query
+                    logger.exception("redis set text_length failed")
 
-        chunks = [ids[i:i + _TEXTLEN_CHUNK] for i in range(0, len(ids), _TEXTLEN_CHUNK)]
+        chunks = [missing[i:i + _TEXTLEN_CHUNK] for i in range(0, len(missing), _TEXTLEN_CHUNK)]
         await asyncio.gather(*(one(c) for c in chunks))
     return out
