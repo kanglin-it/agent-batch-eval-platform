@@ -216,8 +216,13 @@ async def _filter_by_attachment_size(rows: list[dict], size: str) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         if r.get("kind") == "qa":
-            total = sum(lengths.get(i, 0) for i in _parse_doc_ids(r.get("doc_ids")))
+            ids = _parse_doc_ids(r.get("doc_ids"))
+            if not ids:
+                continue  # 无附件的用例，附件大小筛选一律排除
+            total = sum(lengths.get(i, 0) for i in ids)
         else:
+            if not r.get("has_file"):
+                continue  # 审查类无附件同样排除
             total = int(r.get("attach_chars") or 0)
         if pred(total):
             out.append(r)

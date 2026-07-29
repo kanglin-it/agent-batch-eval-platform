@@ -380,8 +380,11 @@ def build_list_source_sql(
 
     if source == "contract_review":
         has_file = _review_has_file_sql(schema)
-        # Only compute EXISTS when filtering; otherwise assume review tasks have files.
-        list_has_file = has_file if filters.has_file is not None else "TRUE"
+        # Compute EXISTS when filtering by 带文件 OR 附件大小 (the size filter excludes
+        # no-file tasks, so it needs the real has_file); otherwise assume TRUE.
+        list_has_file = (
+            has_file if (filters.has_file is not None or filters.attachment_size) else "TRUE"
+        )
         # Only run the file_count SUM subquery when the 附件大小 filter is active.
         attach_chars = _review_charcount_sql(schema) if filters.attachment_size else "NULL::bigint"
         extra, params = _pushdown_clauses(
@@ -409,7 +412,9 @@ def build_list_source_sql(
 
     if source == "file_review":
         has_file = _review_has_file_sql(schema)
-        list_has_file = has_file if filters.has_file is not None else "TRUE"
+        list_has_file = (
+            has_file if (filters.has_file is not None or filters.attachment_size) else "TRUE"
+        )
         attach_chars = _review_charcount_sql(schema) if filters.attachment_size else "NULL::bigint"
         qcol = "COALESCE(t.origin_name, t.task_name)"
         extra, params = _pushdown_clauses(
