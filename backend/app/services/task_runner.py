@@ -24,7 +24,6 @@ from app.services.case_data import fetch_case_data
 from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase, TaskStatus
 from app.services.coze_client import run_eval
 from app.services.oss_file import (
-    _REVIEW_FILE_SOURCES,
     build_file_result,
     extract_text,
     normalize_agent_file_refs,
@@ -279,16 +278,14 @@ _PARSE_PROMPT = (
 )
 
 
-async def _extract_parsed_text(client, result_files: list, source: str | None = None) -> str:
-    """Collect ALL parsed_*.txt deliverables and concatenate them (file_result_new).
+async def _extract_parsed_text(client, result_files: list) -> str:
+    """Collect ALL parsed_*.txt deliverables and concatenate their raw content
+    (file_result_new). No 固定文案/filename labels for any source — just the parse
+    content, multiple files separated by a blank line.
 
     The Agent may emit one parsed_ file per input (multi-file cases); grabbing only
-    the first would drop the rest, leaving file_result_new incomplete and asymmetric
-    with file_result_old. 合同审查/文件审查 label each block with its filename (kept
-    symmetric with the 待审文件/参考文件 old side); other sources just concatenate the
-    raw parse content without the 固定文案.
+    the first would drop the rest, leaving file_result_new incomplete.
     """
-    labeled = source in _REVIEW_FILE_SOURCES
     blocks: list[str] = []
     for f in result_files or []:
         name = f.get("name") or ""
@@ -299,9 +296,7 @@ async def _extract_parsed_text(client, result_files: list, source: str | None = 
         except Exception:  # noqa: BLE001
             logger.exception("download parsed text failed url=%s", str(f.get("url"))[:120])
             continue
-        if labeled:
-            blocks.append(f"【{name}】\n{text}")
-        elif text.strip():
+        if text.strip():
             blocks.append(text.strip())
     return "\n\n".join(blocks)
 
@@ -355,7 +350,7 @@ async def _run_agent(case: EvalTaskCase) -> tuple[str, int, str, str | None, str
     async with agent_slot():
         result = await client.execute(message=message, file_refs=file_refs or None)
     result_files = result.get("files") or []
-    parsed_text = await _extract_parsed_text(client, result_files, case.source) if had_files else ""
+    parsed_text = await _extract_parsed_text(client, result_files) if had_files else ""
     # The answer may live in a generated file (not just the SSE text) — fold it in
     # so answer_new / the Excel 新版答案 include it.
     output_files_text = await _extract_output_files(client, result_files)
