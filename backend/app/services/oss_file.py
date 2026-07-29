@@ -237,27 +237,37 @@ async def resolve_answer_text(baseline: str | None) -> str:
         return ""
 
 
-async def build_file_result(file_refs: list | None) -> str:
-    """Download the old task's files from OSS and format as `file_result_*`:
+# Only 合同审查/文件审查 need the 待审文件/参考文件 结构化文案 in file_result_*; other
+# sources just want the raw parse content.
+_REVIEW_FILE_SOURCES = {"contract_review", "file_review"}
 
-        【待审文件】<name>\n解析内容：<text>\n\n【参考文件】<name>\n解析内容：<text> ...
 
-    The first file is treated as 待审文件 (original), the rest as 参考文件.
+async def build_file_result(file_refs: list | None, source: str | None = None) -> str:
+    """Download the old task's files from OSS and format as `file_result_old`.
+
+    - 合同审查/文件审查: 【待审文件】<name>\n解析内容：<text>\n\n【参考文件】... —
+      the first file is 待审文件 (original), the rest 参考文件.
+    - 其它来源: 直接拼接各文件的解析内容(不加固定文案)。
+
     Returns "" when there are no downloadable file refs.
     """
     refs = [r for r in (normalize_file_ref(x) for x in (file_refs or [])) if r]
     if not refs:
         return ""
+    labeled = source in _REVIEW_FILE_SOURCES
     blocks: list[str] = []
     for idx, (url, name) in enumerate(refs):
-        label = "【待审文件】" if idx == 0 else "【参考文件】"
         try:
             fname, data, _ = await fetch_file_bytes(url, name)
             text = extract_text(fname, data)
         except Exception:
             logger.exception("build_file_result fetch failed url=%s", url[:120])
             text = ""
-        blocks.append(f"{label}{name}\n解析内容：{text}")
+        if labeled:
+            label = "【待审文件】" if idx == 0 else "【参考文件】"
+            blocks.append(f"{label}{name}\n解析内容：{text}")
+        elif text.strip():
+            blocks.append(text.strip())
     return "\n\n".join(blocks)
 
 
