@@ -160,6 +160,14 @@ def _review_has_file_sql(schema: str) -> str:
     )"""
 
 
+def _review_file_ids_sql(schema: str) -> str:
+    """审查类用例的所有文件 file_id（待审 + 参考），用于按 text_length 汇总附件字数。"""
+    return f"""(SELECT jsonb_agg(f.file_id)
+       FROM {schema}.t_file_info f
+      WHERE f.task_id = t.task_id AND f.is_delete = 0
+        AND f.file_type IN ('original_file', 'reference_file') AND f.file_version = 1)"""
+
+
 def _contract_answer_sql(schema: str, task_alias: str = "t", *, max_len: int | None = None) -> str:
     """合同审查系统回答：对齐 v2/task/result 卡片 title + reason(risk)。"""
     agg = f"""(
@@ -381,6 +389,7 @@ def build_list_source_sql(
                t.task_name AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
+               {_review_file_ids_sql(schema)} AS file_ids,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
@@ -407,6 +416,7 @@ def build_list_source_sql(
                {qcol} AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
+               {_review_file_ids_sql(schema)} AS file_ids,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0

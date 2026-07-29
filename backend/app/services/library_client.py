@@ -14,6 +14,7 @@ project files) and merged them, so we do the same: one call per dimension, union
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -126,4 +127,37 @@ async def resolve_oss_urls(project_id: str | None, doc_ids: str | None) -> list[
         "resolve_oss_urls project_id=%s file_ids=%d -> %d file(s)",
         project_id, len(file_ids), len(out),
     )
+    return out
+
+
+_TEXTLEN_CHUNK = 100  # public/query file_ids batch size
+
+
+async def resolve_text_lengths(file_ids: list[str]) -> dict[str, int]:
+    """Resolve {file_id: text_length} for many files via the public library API.
+
+    Feeds the 附件大小 list filter, which sums each case's 文件字数. Queried in
+    batches of file_ids. The returned id is mapped under every id-ish key the API
+    provides (doc_id/file_id/...), so a caller's lookup by its original id hits.
+    Best-effort: returns {} / partial on failure — unknown ids just won't be in the map.
+    """
+    ids = list(dict.fromkeys(i for i in (str(x).strip() for x in (file_ids or [])) if i))
+    if not ids or not settings.library_service:
+        return {}
+    out: dict[str, int] = {}
+    async with httpx.AsyncClient(timeout=settings.library_timeout) as client:
+        async def one(chunk: list[str]) -> None:
+            for f in await _query(client, {"file_ids": chunk}):
+                if not isinstance(f, dict):
+                    continue
+                tl = f.get("text_length")
+                if not isinstance(tl, (int, float)):
+                    continue
+                for key in _ID_KEYS:
+                    v = f.get(key)
+                    if v:
+                        out[str(v).strip()] = int(tl)
+
+        chunks = [ids[i:i + _TEXTLEN_CHUNK] for i in range(0, len(ids), _TEXTLEN_CHUNK)]
+        await asyncio.gather(*(one(c) for c in chunks))
     return out

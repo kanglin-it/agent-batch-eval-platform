@@ -36,7 +36,7 @@ from app.services.case_source import (
     parse_extra,
     resolve_sources,
 )
-from app.services.library_client import resolve_oss_urls
+from app.services.library_client import _parse_doc_ids, resolve_oss_urls, resolve_text_lengths
 from app.services.oss_file import fetch_file_bytes, normalize_file_ref
 from app.utils.text_fix import recover_chinese_text
 
@@ -182,6 +182,51 @@ def _merge_desc(groups: list[list[dict]]) -> list[dict]:
     return list(heapq.merge(*decorated, key=_created_key, reverse=True))
 
 
+# 附件大小分桶：用例所有文件字数(text_length)总和满足该比较。单选。
+_ATTACHMENT_SIZE_BUCKETS = {
+    "le5w": lambda n: n <= 50_000,
+    "le10w": lambda n: n <= 100_000,
+    "le20w": lambda n: n <= 200_000,
+    "ge20w": lambda n: n >= 200_000,
+}
+
+
+def _row_file_ids(r: dict) -> list[str]:
+    """A case row's file identifiers: QA 用 doc_ids，审查类用 file_ids(t_file_info)。"""
+    raw = r.get("doc_ids") if r.get("kind") == "qa" else r.get("file_ids")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return _parse_doc_ids(raw)  # JSON string list / bare id
+
+
+async def _filter_by_attachment_size(rows: list[dict], size: str) -> list[dict]:
+    """Keep rows whose total 文件字数 (Σ text_length via library) matches the bucket.
+
+    text_length only exists in the library API, so we batch-resolve every candidate
+    row's file ids in one shot and sum per case. Best-effort: on library failure the
+    字数 falls back to 0 (rows won't be dropped for a transient library error beyond
+    what the bucket implies)."""
+    pred = _ATTACHMENT_SIZE_BUCKETS.get(size)
+    if pred is None:
+        return rows
+    row_ids = [_row_file_ids(r) for r in rows]
+    all_ids = [i for ids in row_ids for i in ids]
+    lengths: dict[str, int] = {}
+    if all_ids:
+        try:
+            lengths = await asyncio.wait_for(resolve_text_lengths(all_ids), timeout=20)
+        except Exception:  # noqa: BLE001 — never fail the list over the size filter
+            logger.exception("resolve text_lengths failed (%d ids)", len(set(all_ids)))
+    out: list[dict] = []
+    for r, ids in zip(rows, row_ids):
+        total = sum(lengths.get(i, 0) for i in ids)
+        if pred(total):
+            out.append(r)
+    return out
+
+
 def _dedup_by_question(rows: list[dict]) -> list[dict]:
     seen: set[str] = set()
     out: list[dict] = []
@@ -241,6 +286,8 @@ async def list_cases(
     merged = _merge_desc(list(groups))
     if filters.dedup:
         merged = _dedup_by_question(merged)
+    if filters.attachment_size:
+        merged = await _filter_by_attachment_size(merged, filters.attachment_size)
 
     page_rows = merged[offset: offset + page_size]
     has_more = len(merged) > offset + page_size
@@ -286,6 +333,8 @@ async def list_case_ids(
     merged = _merge_desc(list(groups))
     if filters.dedup:
         merged = _dedup_by_question(merged)
+    if filters.attachment_size:
+        merged = await _filter_by_attachment_size(merged, filters.attachment_size)
 
     ids = [r["task_id"] for r in merged[:CASE_SELECTION_LIMIT]]
     capped = len(merged) > CASE_SELECTION_LIMIT or any(

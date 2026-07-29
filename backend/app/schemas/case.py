@@ -10,6 +10,9 @@ class CaseFilter(BaseModel):
     has_file: bool | None = None           # 是否带文件
     user_rating: str | None = None         # 用户评价（好/差评）
     keyword: str | None = None             # 用户提问关键词
+    # 附件大小：按用例所有文件字数总和(text_length)筛选。单选，取值：
+    # le5w(≤5万) | le10w(≤10万) | le20w(≤20万) | ge20w(≥20万)
+    attachment_size: str | None = None
 
     # 数据处理
     dedup: bool = True                     # 自动去重（同用户问题）

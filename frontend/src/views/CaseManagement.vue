@@ -83,11 +83,20 @@ const filters = reactive({
   function_type: '',
   has_file: null as boolean | null,
   user_rating: '',
+  attachment_size: '',
   keyword: '',
   dedup: true,
   exclude_failed: true,
   extra: [] as { field: string; value: string }[],
 })
+
+// 附件大小：单选，用例所有文件字数总和满足该条件
+const ATTACHMENT_SIZE_OPTIONS = [
+  { value: 'le5w', label: '≤5万' },
+  { value: 'le10w', label: '≤10万' },
+  { value: 'le20w', label: '≤20万' },
+  { value: 'ge20w', label: '≥20万' },
+]
 
 const dateRange = computed({
   get: (): [string, string] | null =>
@@ -323,6 +332,7 @@ function reset() {
     function_type: '',
     has_file: null,
     user_rating: '',
+    attachment_size: '',
     keyword: '',
     dedup: true,
     exclude_failed: true,
@@ -423,6 +433,10 @@ const filterSummary = computed(() => {
   if (filters.function_type) parts.push(`功能类型：${SOURCE_LABELS[filters.function_type] || filters.function_type}`)
   if (filters.user_rating === 'good') parts.push('用户评价：好评')
   if (filters.user_rating === 'bad') parts.push('用户评价：差评')
+  if (filters.attachment_size) {
+    const sz = ATTACHMENT_SIZE_OPTIONS.find((o) => o.value === filters.attachment_size)
+    if (sz) parts.push(`附件大小：${sz.label}`)
+  }
   if (filters.keyword) parts.push(`关键词：${filters.keyword}`)
   if (filters.created_start || filters.created_end) {
     parts.push(`创建时间：${filters.created_start || '…'} ~ ${filters.created_end || '…'}`)
@@ -534,6 +548,16 @@ onMounted(() => {
           <el-select v-model="filters.user_rating" placeholder="- 全部 -" clearable class="filter-control">
             <el-option label="好评" value="good" />
             <el-option label="差评" value="bad" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="附件大小：">
+          <el-select v-model="filters.attachment_size" placeholder="- 全部 -" clearable class="filter-control">
+            <el-option
+              v-for="opt in ATTACHMENT_SIZE_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="用户提问：">
