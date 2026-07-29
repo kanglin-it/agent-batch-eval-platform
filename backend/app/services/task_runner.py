@@ -41,11 +41,13 @@ CONCURRENCY = settings.task_concurrency
 # so a high CONCURRENCY (or many parallel tasks) can't exhaust the write pool.
 _persist_sem = asyncio.Semaphore(settings.task_persist_concurrency)
 
-# Cap the parsed-file text sent to Coze (file_result_old / file_result_new). Very
-# large parses (e.g. 阅卷笔录 = 几十页 PDF) blow up the eval workflow's runtime and
-# can time it out; keep only the first 20万字. Applies to BOTH old (SaaS 文件解析)
-# and new (Agent 文件解析) sides, so the comparison stays symmetric.
+# When the parsed-file text is too large (e.g. 阅卷笔录 = 几十页 PDF) it blows up the
+# Coze eval workflow's runtime and times it out. If it exceeds 20万字 we don't send
+# the text at all — we send a fixed placeholder for BOTH file_result_old and
+# file_result_new. Only the OLD side is checked: old & new share the same files, so
+# if old is over-size the new side is too.
 _FILE_RESULT_MAX_CHARS = 200_000
+_FILE_RESULT_OVERSIZE_TEXT = "解析内容已超过20万字"
 
 # Fixed agent prompts for review modules (question/task_name is not the user command).
 REVIEW_AGENT_PROMPTS = {
@@ -163,18 +165,6 @@ async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str
             case.baseline_answer = None
             case.compare_result = None
             case.files = None
-
-
-def _cap_file_result(s: str | None, *, case_id: int | None = None, side: str = "") -> str:
-    """Truncate parsed-file text to the first _FILE_RESULT_MAX_CHARS chars for Coze."""
-    s = s or ""
-    if len(s) <= _FILE_RESULT_MAX_CHARS:
-        return s
-    logger.info(
-        "[Compare] case=%s file_result_%s 超长(%d字)，截断到前%d字",
-        case_id, side, len(s), _FILE_RESULT_MAX_CHARS,
-    )
-    return s[:_FILE_RESULT_MAX_CHARS]
 
 
 def _scrub_nul(value):
@@ -448,11 +438,20 @@ async def _compare(case: EvalTaskCase, workflow_id: str) -> dict:
     )
     # Scrub NUL from every Coze input — old-side text comes from PDF/docx extraction
     # which can carry 0x00; Coze rejects it just like PG does.
+    file_result_new = case.agent_file_result or ""
+    # 老侧文件解析超过 20万字时，两侧都传固定文案（新旧文件相同，老的超了新的也超），
+    # 避免超长入参撑爆 Coze 工作流导致超时。只判断老侧即可。
+    if len(file_result_old) > _FILE_RESULT_MAX_CHARS:
+        logger.info(
+            "[Compare] case=%s file_result_old 超20万字(%d字)，两侧改用固定文案",
+            case.id, len(file_result_old),
+        )
+        file_result_old = file_result_new = _FILE_RESULT_OVERSIZE_TEXT
+
     params = _scrub_nul({
         "query": _compare_query(case),
-        # 文件解析入参超过 20万字则只取前 20万字（新旧对称，防止 Coze 工作流超时）
-        "file_result_old": _cap_file_result(file_result_old, case_id=case.id, side="old"),
-        "file_result_new": _cap_file_result(case.agent_file_result, case_id=case.id, side="new"),
+        "file_result_old": file_result_old,
+        "file_result_new": file_result_new,
         "answer_old": answer_old,
         "answer_new": case.agent_output or "",
     })
