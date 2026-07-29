@@ -125,6 +125,7 @@ def _source_filters(filters: CaseFilter) -> SourceFilters:
         channel_type=extra.get("channel_type"),
         sub_function=extra.get("sub_function"),
         draft_type=extra.get("draft_type"),
+        attachment_size=filters.attachment_size or None,
     )
 
 

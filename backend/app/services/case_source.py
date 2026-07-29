@@ -52,6 +52,9 @@ class SourceFilters:
     sub_function: str | None = None  # 传统文书 / 要素式 / AI类案 / AI搜法
     # 文书起草类型（智能起草/合同起草等）：模糊匹配 draft_name OR llm_category_name
     draft_type: str | None = None
+    # 附件大小分桶（le5w/le10w/le20w/ge20w）。仅当设置时审查类列表才计算 attach_chars
+    # 子查询（否则不算，避免每次列表都跑一次 file_count 求和）。
+    attachment_size: str | None = None
 
 
 def parse_extra(extra: list[dict] | None) -> dict[str, str]:
@@ -379,6 +382,8 @@ def build_list_source_sql(
         has_file = _review_has_file_sql(schema)
         # Only compute EXISTS when filtering; otherwise assume review tasks have files.
         list_has_file = has_file if filters.has_file is not None else "TRUE"
+        # Only run the file_count SUM subquery when the 附件大小 filter is active.
+        attach_chars = _review_charcount_sql(schema) if filters.attachment_size else "NULL::bigint"
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col="t.task_name",
             task_key="t.task_id", task_id_col="t.task_id", channel_col="t.channel_type",
@@ -390,7 +395,7 @@ def build_list_source_sql(
                t.task_name AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
-               {_review_charcount_sql(schema)} AS attach_chars,
+               {attach_chars} AS attach_chars,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0
@@ -405,6 +410,7 @@ def build_list_source_sql(
     if source == "file_review":
         has_file = _review_has_file_sql(schema)
         list_has_file = has_file if filters.has_file is not None else "TRUE"
+        attach_chars = _review_charcount_sql(schema) if filters.attachment_size else "NULL::bigint"
         qcol = "COALESCE(t.origin_name, t.task_name)"
         extra, params = _pushdown_clauses(
             source, created_col="t.created", question_col=qcol,
@@ -417,7 +423,7 @@ def build_list_source_sql(
                {qcol} AS question, t.created AS src_created,
                NULL::text AS sub_function,
                NULL::text AS doc_ids, NULL::text AS project_id,
-               {_review_charcount_sql(schema)} AS attach_chars,
+               {attach_chars} AS attach_chars,
                {list_has_file} AS has_file, t.channel_type AS channel_type
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0
