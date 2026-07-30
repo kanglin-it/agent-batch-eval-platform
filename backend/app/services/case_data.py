@@ -9,13 +9,18 @@ Each source query is filtered by `task_id = ANY(:ids)` so we never scan full tab
 """
 import asyncio
 import json
+from collections import defaultdict
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.baseline_links import build_baseline_jump_url
-from app.services.case_source import build_hydrate_sql, build_jump_meta_sql
+from app.services.case_source import (
+    COZE_DESCRIBE_BY_SOURCE,
+    build_hydrate_sql,
+    build_jump_meta_sql,
+)
 from app.services.library_client import resolve_oss_urls
 from app.utils.text_fix import recover_chinese_text
 
@@ -98,20 +103,41 @@ async def fetch_case_data(db: AsyncSession, task_ids: list[str]) -> dict[str, di
     return out
 
 
-async def fetch_baseline_coze_urls(db: AsyncSession, task_ids: list[str]) -> dict[str, str]:
-    """Map source task_id -> t_coze_log.debug_url (latest non-empty per task)."""
-    if not task_ids:
+async def fetch_baseline_coze_urls(
+    db: AsyncSession, pairs: list[tuple[str, str | None]]
+) -> dict[str, str]:
+    """Map source task_id -> t_coze_log.debug_url (latest matching row per task).
+
+    `pairs` = [(task_id, source), ...]. The right row is the 主流程 one, identified by
+    describe per source (COZE_DESCRIBE_BY_SOURCE); task_ids are grouped by their
+    describe filter so each group runs one query. Sources without a mapped describe
+    fall back to "latest non-empty" (no describe filter)."""
+    if not pairs:
         return {}
     schema = settings.case_schema
-    sql = text(f"""
-        SELECT DISTINCT ON (cl.task_id) cl.task_id, cl.debug_url
-          FROM {schema}.t_coze_log cl
-         WHERE cl.task_id = ANY(:ids)
-           AND cl.debug_url IS NOT NULL AND btrim(cl.debug_url) <> ''
-         ORDER BY cl.task_id, cl.id DESC
-    """)
-    rows = (await db.execute(sql, {"ids": task_ids})).mappings().all()
-    return {r["task_id"]: r["debug_url"].strip() for r in rows if r.get("debug_url")}
+    by_desc: dict[str | None, list[str]] = defaultdict(list)
+    for tid, source in pairs:
+        by_desc[COZE_DESCRIBE_BY_SOURCE.get(source)].append(tid)
+
+    out: dict[str, str] = {}
+    for desc, ids in by_desc.items():
+        cond = "AND cl.describe = :desc" if desc else ""
+        sql = text(f"""
+            SELECT DISTINCT ON (cl.task_id) cl.task_id, cl.debug_url
+              FROM {schema}.t_coze_log cl
+             WHERE cl.task_id = ANY(:ids)
+               AND cl.debug_url IS NOT NULL AND btrim(cl.debug_url) <> ''
+               {cond}
+             ORDER BY cl.task_id, cl.id DESC
+        """)
+        params: dict = {"ids": ids}
+        if desc:
+            params["desc"] = desc
+        rows = (await db.execute(sql, params)).mappings().all()
+        for r in rows:
+            if r.get("debug_url"):
+                out[r["task_id"]] = r["debug_url"].strip()
+    return out
 
 
 async def fetch_baseline_jump_urls(db: AsyncSession, task_ids: list[str]) -> dict[str, str]:

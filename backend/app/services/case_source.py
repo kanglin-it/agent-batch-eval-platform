@@ -673,12 +673,24 @@ def _contract_stance_sql(schema: str) -> str:
       LIMIT 1)"""
 
 
-def _coze_debug_url_sql(schema: str, task_key: str) -> str:
-    """旧版任务 Coze 执行链接：t_coze_log.debug_url，按 task_id 取最新非空一条。"""
+# 同一个 task_id 在 t_coze_log 里可能有多条（多个 coze 节点/中间调用），只有主流程
+# 那条才是要的旧版执行链接。按来源用 describe 精准命中；未列出的来源暂不加过滤。
+COZE_DESCRIBE_BY_SOURCE = {
+    "legal_research": "法律研究3.0对话",
+    "contract_review": "审查主流程-同步任务",
+    "file_review": "审查主流程-同步任务",
+}
+
+
+def _coze_debug_url_sql(schema: str, task_key: str, describe: str | None = None) -> str:
+    """旧版任务 Coze 执行链接：t_coze_log.debug_url，按 task_id（+可选 describe 主流程）
+    取最新非空一条。"""
+    desc = f"AND cl.describe = '{describe.replace(chr(39), chr(39) * 2)}'" if describe else ""
     return f"""(SELECT cl.debug_url
        FROM {schema}.t_coze_log cl
       WHERE cl.task_id = {task_key}
         AND cl.debug_url IS NOT NULL AND btrim(cl.debug_url) <> ''
+        {desc}
       ORDER BY cl.id DESC
       LIMIT 1)"""
 
@@ -697,7 +709,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                t.doc_ids AS attachment, t.project_id AS project_id, NULL::jsonb AS original_file,
                NULL::jsonb AS reference_files, NULL::text AS detail_annotated_file,
                NULL::jsonb AS stance,
-               {_coze_debug_url_sql(schema, "t.chat_id")} AS baseline_coze_url,
+               {_coze_debug_url_sql(schema, "t.chat_id", COZE_DESCRIBE_BY_SOURCE["legal_research"])} AS baseline_coze_url,
                NULL::text AS source_user_id
         FROM {schema}.t_legal_research_info t
         WHERE t.is_delete = 0
@@ -753,7 +765,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                {stance} AS stance,
-               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url,
+               {_coze_debug_url_sql(schema, "t.task_id", COZE_DESCRIBE_BY_SOURCE["contract_review"])} AS baseline_coze_url,
                NULL::text AS source_user_id
         FROM {schema}.t_contract_tasks t
         WHERE t.is_delete = 0 AND {_MAIN_TASK_ONLY} AND t.task_id = ANY(:ids)
@@ -770,7 +782,7 @@ def _hydrate_source_sql(schema: str, source: str) -> str:
                NULL AS attachment, NULL::text AS project_id, {orig} AS original_file,
                {refs} AS reference_files, ({detail})->>'url' AS detail_annotated_file,
                jsonb_build_object('custom_require', t.custom_require) AS stance,
-               {_coze_debug_url_sql(schema, "t.task_id")} AS baseline_coze_url,
+               {_coze_debug_url_sql(schema, "t.task_id", COZE_DESCRIBE_BY_SOURCE["file_review"])} AS baseline_coze_url,
                NULL::text AS source_user_id
         FROM {schema}.t_file_review_task t
         WHERE t.is_delete = 0 AND t.task_id = ANY(:ids)

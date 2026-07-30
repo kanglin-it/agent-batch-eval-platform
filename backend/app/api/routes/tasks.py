@@ -246,7 +246,9 @@ async def download_result(
     cases = sorted(task.cases, key=lambda c: c.id)
 
     # 旧任务可能尚未落库 baseline_coze_url / baseline_jump_url：下载时补查
-    missing_coze = [c.source_case_id for c in cases if not (c.baseline_coze_url or "").strip()]
+    missing_coze = [
+        (c.source_case_id, c.source) for c in cases if not (c.baseline_coze_url or "").strip()
+    ]
     missing_jump = [c.source_case_id for c in cases if not (c.baseline_jump_url or "").strip()]
     changed = False
     if missing_coze:
