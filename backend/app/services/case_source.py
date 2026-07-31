@@ -678,7 +678,7 @@ def _contract_stance_sql(schema: str) -> str:
 COZE_DESCRIBE_BY_SOURCE = {
     "legal_research": "法律研究3.0对话",
     "contract_review": "审查主流程-同步任务",
-    "file_review": "审查主流程-同步任务",
+    "file_review": "文件审查主流程",
 }
 
 
