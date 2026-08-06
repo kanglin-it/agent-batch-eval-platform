@@ -59,9 +59,7 @@ class EvalTask(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     eval_workflow_id: Mapped[str] = mapped_column(String(100))   # Coze workflow id
-    # 不再绑定团队 skill ID：提交个人 skill 到团队空间时选新建/覆盖即可，这里只记录
-    # 实际操作人（登录用户，不可被 creator 展示名覆盖）。
-    eval_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    eval_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # reserved (P1)
     case_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[TaskStatus] = mapped_column(_TaskStatusCol, default=TaskStatus.agent_running)
     creator: Mapped[str] = mapped_column(String(150))          # display name

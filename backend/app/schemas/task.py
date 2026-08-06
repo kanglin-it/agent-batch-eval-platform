@@ -21,7 +21,7 @@ class TaskListItem(BaseModel):
     id: int
     name: str
     eval_workflow_id: str
-    eval_skill_id: str | None = None  # 实际操作人（提交 skill 到团队空间的登录用户）
+    eval_skill_id: str | None = None
     case_count: int
     status: TaskStatus
     progress: str  # e.g. "230/1000"

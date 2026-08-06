@@ -104,7 +104,6 @@ async def create_task(
         scheduled_at=scheduled_at,
         creator=(body.creator or current.username).strip() or current.username,
         creator_phone=current.phone,          # recorded for reference (no isolation)
-        eval_skill_id=current.username,       # 实际操作人（不用 body.creator，不可伪造）
         filter_snapshot=body.filter_snapshot,
     )
     task.cases = [
