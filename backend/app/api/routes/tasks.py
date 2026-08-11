@@ -55,9 +55,15 @@ def _failed_count(task: EvalTask) -> int:
 
 
 def _incomplete_count(task: EvalTask) -> int:
-    """Cases not yet finished (anything other than compared): failed / pending /
-    agent_done. These are exactly what a retry would (re)run."""
-    return sum(1 for c in task.cases if c.stage != CaseStage.compared)
+    """Cases not yet finished — exactly what a retry would (re)run. The terminal
+    stage depends on whether the task evaluates: with a workflow it's `compared`;
+    without one (选填为空，不评测) it's `agent_done`, so agent-done cases are NOT
+    counted as incomplete (else a no-eval task would look forever-retryable)."""
+    if (task.eval_workflow_id or "").strip():
+        return sum(1 for c in task.cases if c.stage != CaseStage.compared)
+    return sum(
+        1 for c in task.cases if c.stage not in (CaseStage.agent_done, CaseStage.compared)
+    )
 
 
 def _retryable(task: EvalTask) -> bool:
@@ -97,7 +103,7 @@ async def create_task(
 
     task = EvalTask(
         name=body.name,
-        eval_workflow_id=body.eval_workflow_id,
+        eval_workflow_id=(body.eval_workflow_id or "").strip(),   # 选填，为空=不评测
         case_count=len(case_ids),
         # 定时任务先挂起，到点由调度器拉起；否则立即执行。
         status=TaskStatus.scheduled if scheduled_at else TaskStatus.agent_running,

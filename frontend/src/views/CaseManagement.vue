@@ -471,7 +471,7 @@ async function openCreateDialog() {
 
 async function submitTask() {
   if (!taskForm.name.trim()) return ElMessage.warning('请填写任务名称')
-  if (!taskForm.eval_workflow_id.trim()) return ElMessage.warning('请填写评测标准 Workflow')
+  // 评测标准 Workflow 选填：留空则该任务不执行评测工作流
   if (!taskForm.creator.trim()) return ElMessage.warning('请填写创建人')
   const ids = Array.from(selectedIds.value)
   if (ids.length === 0) return ElMessage.warning('请先选择评测用例')
@@ -776,8 +776,7 @@ onMounted(() => {
           </div>
         </el-form-item>
 
-        <el-form-item required>
-          <template #label><span class="req">*</span> 评测标准 Workflow</template>
+        <el-form-item label="评测标准 Workflow">
           <el-select
             v-model="taskForm.eval_workflow_id"
             class="wf-select"
@@ -786,10 +785,11 @@ onMounted(() => {
             default-first-option
             clearable
             :loading="workflowLoading"
-            placeholder="选择历史 Workflow 或手动输入 Coze 工作流ID"
+            placeholder="选填：留空则不执行评测工作流"
           >
             <el-option v-for="id in workflowIds" :key="id" :label="id" :value="id" />
           </el-select>
+          <div class="scope-filters">选填，留空则该任务只跑 Agent、不评测，导出评测结果字段为“/”</div>
         </el-form-item>
 
         <el-form-item label="执行时间">

@@ -3,7 +3,10 @@ import io
 
 from openpyxl import Workbook
 
-from app.models.eval_task import EvalTask, EvalTaskCase
+from app.models.eval_task import CaseStage, EvalTask, EvalTaskCase
+
+# 未评测（workflow 选填为空，或用例未跑到对比阶段）时，评测结果字段统一显示 "/"。
+NO_EVAL = "/"
 
 HEADERS = [
     "任务名称",
@@ -45,23 +48,26 @@ def _format_latency(ms: int | float | None) -> str:
 
 def _row(task: EvalTask, c: EvalTaskCase) -> list:
     cr = c.compare_result or {}
+    evaluated = c.stage == CaseStage.compared
+    # 评测结果字段：已评测用真实值，未评测统一显示 "/"。
+    ev = (lambda v: v) if evaluated else (lambda v: NO_EVAL)
     return [
         task.name,
-        task.eval_workflow_id,
+        task.eval_workflow_id or NO_EVAL,     # 未填 workflow → "/"
         c.source_case_id,
         c.source or "",
         c.question or "",
         c.baseline_answer or "",
         c.agent_output or "",
-        cr.get("score_old"),
-        cr.get("score_new"),
-        cr.get("file_score_old"),
-        cr.get("file_score_new"),
-        "是" if c.is_win else ("否" if c.is_win is not None else ""),
-        cr.get("score_reason") or "",
+        ev(cr.get("score_old")),
+        ev(cr.get("score_new")),
+        ev(cr.get("file_score_old")),
+        ev(cr.get("file_score_new")),
+        ev("是" if c.is_win else ("否" if c.is_win is not None else "")),
+        ev(cr.get("score_reason") or ""),
         c.baseline_jump_url or "",
         c.baseline_coze_url or "",
-        c.coze_exec_url or "",
+        ev(c.coze_exec_url or ""),
         c.agent_task_url or "",
         _format_latency(c.agent_latency_ms),
         c.stage.value if c.stage is not None else "",

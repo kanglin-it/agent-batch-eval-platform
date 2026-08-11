@@ -7,7 +7,8 @@ from app.models.eval_task import TaskStatus
 
 class CreateTaskRequest(BaseModel):
     name: str = Field(..., description="任务名称，默认可用创建时间")
-    eval_workflow_id: str = Field(..., description="Coze 工作流 id")
+    # 选填：为空则该任务只跑 Agent、不执行 Coze 评测工作流，评测结果字段导出为 "/"。
+    eval_workflow_id: str = Field(default="", description="Coze 工作流 id（选填，为空不评测）")
     case_ids: list[str] = Field(..., max_length=500, description="选中的用例 id，上限 500")
     filter_snapshot: dict = Field(default_factory=dict)
     creator: str | None = Field(default=None, description="创建人；为空则用当前登录用户")

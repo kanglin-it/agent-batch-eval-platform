@@ -98,11 +98,16 @@ async def run_task(task_id: int) -> None:
         await asyncio.gather(*(_pipeline(c, sem, workflow_id) for c in cases))
 
         # ---- Aggregate (small scalars only; heavy text already freed) ----
-        done = [c for c in cases if c.stage == CaseStage.compared]
+        # 选填 workflow：为空时任务不评测，用例跑到 agent_done 即算完成；胜率/幻觉数
+        # 无从计算（保持 None，导出为 "/"），只算平均耗时。
+        has_workflow = bool((workflow_id or "").strip())
+        terminal = CaseStage.compared if has_workflow else CaseStage.agent_done
+        done = [c for c in cases if c.stage == terminal]
         failed = [c for c in cases if c.stage == CaseStage.failed]
-        if done:
+        if done and has_workflow:
             task.win_rate = round(sum(1 for c in done if c.is_win) / len(done), 4)
             task.hallucination_count = sum(1 for c in done if c.hallucination)
+        if done:
             latencies = [c.agent_latency_ms for c in done if c.agent_latency_ms is not None]
             task.avg_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else None
         task.status = TaskStatus.failed if failed and not done else TaskStatus.completed
@@ -150,8 +155,10 @@ async def _pipeline(case: EvalTaskCase, sem: asyncio.Semaphore, workflow_id: str
             await _stage_agent(case)            # sets agent_output/file_result/…
             if case.stage == CaseStage.agent_done:
                 await _persist_case(case)
-                await _stage_compare(case, workflow_id=workflow_id)
-                await _persist_case(case)
+                # workflow 选填：为空则不执行评测工作流，用例停在 agent_done。
+                if (workflow_id or "").strip():
+                    await _stage_compare(case, workflow_id=workflow_id)
+                    await _persist_case(case)
         except Exception as exc:  # noqa: BLE001
             logger.exception("case %s failed", case.id)
             case.stage = CaseStage.failed
